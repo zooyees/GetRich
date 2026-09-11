@@ -1,0 +1,25 @@
+[package]
+name = "getrich-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "GetRich HTTP API and quote workstation"
+
+[lib]
+name = "getrich_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "getrich-api"
+path = "src/main.rs"
+
+[dependencies]
+getrich-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tiny_http = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "getrich-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "GetRich JSON CLI"
+
+[[bin]]
+name = "getrich"
+path = "src/main.rs"
+
+[dependencies]
+getrich-core = { workspace = true }
+getrich-api = { path = "../getrich-api" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+ureq = { workspace = true }
+url = { workspace = true }

@@ -1,0 +1,98 @@
+{
+  "listings": [
+    {
+      "symbol": "600519",
+      "market": "CN.SH",
+      "name": "贵州茅台",
+      "currency": "CNY",
+      "instrument_type": "equity",
+      "status": "active",
+      "exchange": "SSE"
+    },
+    {
+      "symbol": "AAPL",
+      "market": "US",
+      "name": "Apple Inc.",
+      "currency": "USD",
+      "instrument_type": "equity",
+      "status": "active",
+      "exchange": "NASDAQ"
+    }
+  ],
+  "quotes": [
+    {
+      "symbol": "600519",
+      "market": "CN.SH",
+      "ts": "2024-01-03T07:00:00Z",
+      "last": 1490.0,
+      "open": 1488.0,
+      "high": 1500.0,
+      "low": 1480.0,
+      "prev_close": 1488.0,
+      "volume": 1100,
+      "turnover": 1639000,
+      "currency": "CNY"
+    },
+    {
+      "symbol": "AAPL",
+      "market": "US",
+      "ts": "2024-01-03T21:00:00Z",
+      "last": 185.5,
+      "open": 184.0,
+      "high": 186.2,
+      "low": 183.1,
+      "prev_close": 184.8,
+      "volume": 52000000,
+      "turnover": 9646000000,
+      "currency": "USD"
+    }
+  ],
+  "bars": [
+    {
+      "symbol": "600519",
+      "market": "CN.SH",
+      "timeframe": "1d",
+      "ts": "2024-01-02",
+      "open": 1470,
+      "high": 1499,
+      "low": 1460,
+      "close": 1488,
+      "volume": 1000,
+      "turnover": 1488000
+    },
+    {
+      "symbol": "600519",
+      "market": "CN.SH",
+      "timeframe": "1d",
+      "ts": "2024-01-03",
+      "open": 1488,
+      "high": 1500,
+      "low": 1480,
+      "close": 1490,
+      "volume": 1100,
+      "turnover": 1639000
+    },
+    {
+      "symbol": "AAPL",
+      "market": "US",
+      "timeframe": "1d",
+      "ts": "2024-01-02",
+      "open": 183.0,
+      "high": 185.0,
+      "low": 182.5,
+      "close": 184.8,
+      "volume": 48000000
+    },
+    {
+      "symbol": "AAPL",
+      "market": "US",
+      "timeframe": "1d",
+      "ts": "2024-01-03",
+      "open": 184.0,
+      "high": 186.2,
+      "low": 183.1,
+      "close": 185.5,
+      "volume": 52000000
+    }
+  ]
+}
