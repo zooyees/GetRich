@@ -1,0 +1,27 @@
+{
+  "system": {
+    "db_name": "getrich.db",
+    "log_file": "getrich.log",
+    "log_level": "INFO",
+    "db_commit_interval_sec": 1.0,
+    "db_commit_batch_size": 500
+  },
+  "http": {
+    "bind": "127.0.0.1:7878"
+  },
+  "universe": {
+    "watchlist": [
+      { "symbol": "AAPL", "market": "US", "name": "Apple Inc." },
+      { "symbol": "MSFT", "market": "US", "name": "Microsoft" },
+      { "symbol": "600519", "market": "CN.SH", "name": "贵州茅台" },
+      { "symbol": "000001", "market": "CN.SZ", "name": "平安银行" },
+      { "symbol": "00700", "market": "HK", "name": "腾讯控股" }
+    ]
+  },
+  "data": {
+    "default_timeframe": "1d",
+    "read_retries": 3,
+    "read_retry_backoff_ms": 500,
+    "read_timeout_ms": 15000
+  }
+}

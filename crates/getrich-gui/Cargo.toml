@@ -1,0 +1,34 @@
+[package]
+name = "getrich-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "GetRich desktop workstation (egui) — Tonghuashun-style quote board"
+
+[[bin]]
+name = "getrich-gui"
+path = "src/main.rs"
+
+[dependencies]
+getrich-core = { workspace = true }
+getrich-api = { path = "../getrich-api" }
+eframe = { workspace = true }
+egui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+image = { workspace = true }
+wayland-protocols = { workspace = true }
+smithay-clipboard = { workspace = true }
+proc-macro-crate = { workspace = true }
+toml_edit = { workspace = true }
+indexmap = { workspace = true }
+unicode-segmentation = { workspace = true }
+async-lock = { workspace = true }
+toml = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "=0.1.23"

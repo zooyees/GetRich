@@ -1,0 +1,17 @@
+/target/
+**/*.rs.bk
+.idea/
+.vscode/
+*.pdb
+config.json
+*.db
+*.db-wal
+*.db-shm
+getrich.log
+logs/
+node_modules/
+.cursor/
+
+# Local data
+/data/
+/dist/

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GetRich</title>
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="#/" aria-label="GetRich 主页">GetRich</a>
+        <nav class="nav" aria-label="主导航">
+          <a href="#/" data-route="home">主页</a>
+          <a href="#/quotes" data-route="quotes">行情</a>
+        </nav>
+        <p id="status-pill" class="pill">连接中</p>
+      </header>
+
+      <main>
+        <section id="view-home" class="view view-home" hidden>
+          <div class="home-hero">
+            <p class="home-kicker">行情工作站</p>
+            <h1>看盘，从这里开始。</h1>
+            <p class="home-lead">报价、明细与 K 线。数据由你导入，软件只负责呈现。</p>
+            <div class="home-actions">
+              <a class="btn btn-primary" href="#/quotes">打开行情</a>
+            </div>
+            <dl class="home-stats" id="home-stats">
+              <div>
+                <dt>标的</dt>
+                <dd id="home-listings">—</dd>
+              </div>
+              <div>
+                <dt>报价</dt>
+                <dd id="home-quotes">—</dd>
+              </div>
+              <div>
+                <dt>日线</dt>
+                <dd id="home-bars">—</dd>
+              </div>
+            </dl>
+            <p class="home-note" id="home-note"></p>
+          </div>
+        </section>
+
+        <section id="view-quotes" class="view" hidden>
+          <div class="page-head">
+            <div>
+              <h1>行情</h1>
+              <p class="page-sub">沪深京 · 创业板 · 科创板 · 港股 · 美股</p>
+            </div>
+            <label class="field field-search">
+              <span>搜索</span>
+              <input id="quote-search" type="search" placeholder="名称 / 代码" autocomplete="off" />
+            </label>
+          </div>
+          <nav id="boards" class="boards" aria-label="板块"></nav>
+          <div id="quote-flash" class="flash" hidden></div>
+          <div class="table-wrap" id="quote-table-wrap" hidden>
+            <table class="quote-table">
+              <thead>
+                <tr>
+                  <th data-sort="symbol">代码</th>
+                  <th>名称</th>
+                  <th>最新</th>
+                  <th data-sort="change_pct">涨幅%</th>
+                  <th>涨跌</th>
+                  <th>今开</th>
+                  <th>最高</th>
+                  <th>最低</th>
+                  <th>昨收</th>
+                  <th data-sort="volume">成交量</th>
+                  <th data-sort="turnover">成交额</th>
+                  <th>振幅%</th>
+                  <th>市场</th>
+                  <th>板块</th>
+                </tr>
+              </thead>
+              <tbody id="quote-body"></tbody>
+            </table>
+          </div>
+          <p class="hint" id="quote-hint">↑ ↓ 选择 · Enter 明细 · / 搜索</p>
+        </section>
+
+        <section id="view-detail" class="view" hidden>
+          <div class="page-head">
+            <div>
+              <a class="back" href="#/quotes">行情</a>
+              <h1 id="detail-name">—</h1>
+              <p id="detail-code" class="page-sub">—</p>
+            </div>
+          </div>
+          <div id="detail-flash" class="flash" hidden></div>
+          <div class="quote-strip" id="quote-strip"></div>
+          <div class="kline-bar">
+            <div class="seg" id="tf-tabs" role="tablist">
+              <button type="button" data-tf="1d" class="active">日K</button>
+              <button type="button" data-tf="1w">周K</button>
+              <button type="button" data-tf="1mo">月K</button>
+            </div>
+            <p class="kline-meta" id="kline-meta"></p>
+          </div>
+          <canvas id="kline" width="1200" height="420" aria-label="K线图"></canvas>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
