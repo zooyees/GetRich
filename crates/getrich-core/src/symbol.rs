@@ -33,7 +33,10 @@ pub fn parse_instrument(raw: &str, market_hint: Option<&str>) -> Result<Instrume
     } else {
         infer_market(&upper)?
     };
-    Ok(InstrumentKey::new(canonicalize_symbol(&upper, market)?, market))
+    Ok(InstrumentKey::new(
+        canonicalize_symbol(&upper, market)?,
+        market,
+    ))
 }
 
 fn parse_suffixed(upper: &str) -> Option<InstrumentKey> {
@@ -47,10 +50,8 @@ fn parse_suffixed(upper: &str) -> Option<InstrumentKey> {
         (s, Market::CnBj)
     } else if let Some(s) = upper.strip_suffix(".HK") {
         (s, Market::Hk)
-    } else if let Some(s) = upper.strip_suffix(".US") {
-        (s, Market::Us)
     } else {
-        return None;
+        (upper.strip_suffix(".US")?, Market::Us)
     };
     canonicalize_symbol(stem, market)
         .ok()
@@ -70,14 +71,13 @@ fn parse_prefixed(upper: &str) -> Option<InstrumentKey> {
         } else {
             return None;
         }
-    } else if let Some(s) = upper.strip_prefix("BJ") {
+    } else {
+        let s = upper.strip_prefix("BJ")?;
         if s.chars().all(|c| c.is_ascii_digit()) && s.len() == 6 {
             (s, Market::CnBj)
         } else {
             return None;
         }
-    } else {
-        return None;
     };
     canonicalize_symbol(stem, market)
         .ok()
@@ -88,7 +88,9 @@ fn infer_market(upper: &str) -> Result<Market, String> {
     if upper.chars().all(|c| c.is_ascii_digit()) {
         match upper.len() {
             6 if upper.starts_with('6') || upper.starts_with("900") => Ok(Market::CnSh),
-            6 if upper.starts_with('8') || upper.starts_with('4') => Ok(Market::CnBj),
+            6 if upper.starts_with('8') || upper.starts_with('4') || upper.starts_with("92") => {
+                Ok(Market::CnBj)
+            }
             6 => Ok(Market::CnSz),
             1..=5 => Ok(Market::Hk),
             _ => Err(format!("cannot infer market for numeric symbol {upper}")),
@@ -179,10 +181,9 @@ pub fn board_matches(key: &InstrumentKey, board: &str) -> bool {
         "CN.BJ" | "BJ" | "北证" => key.market == Market::CnBj,
         "STAR" | "KCB" | "科创板" => board_id(key) == "STAR",
         "CHINEXT" | "CYB" | "创业板" => board_id(key) == "CHINEXT",
-        "CN" | "A" | "沪深京" => matches!(
-            key.market,
-            Market::CnSh | Market::CnSz | Market::CnBj
-        ),
+        "CN" | "A" | "沪深京" => {
+            matches!(key.market, Market::CnSh | Market::CnSz | Market::CnBj)
+        }
         _ => board_id(key).eq_ignore_ascii_case(&b),
     }
 }
@@ -212,9 +213,15 @@ mod tests {
         let sh = parse_instrument("SH600519", None).unwrap();
         assert_eq!(sh.market, Market::CnSh);
 
-        let bj = parse_instrument("830001.BJ", None).unwrap();
-        assert_eq!(bj.market, Market::CnBj);
-        assert_eq!(board_id(&bj), "CN.BJ");
+        let bj920 = parse_instrument("920002", None).unwrap();
+        assert_eq!(bj920.symbol, "920002");
+        assert_eq!(bj920.market, Market::CnBj);
+        let bj83 = parse_instrument("830001", None).unwrap();
+        assert_eq!(bj83.market, Market::CnBj);
+        let bj87 = parse_instrument("870001", None).unwrap();
+        assert_eq!(bj87.market, Market::CnBj);
+        let bj43 = parse_instrument("430047", None).unwrap();
+        assert_eq!(bj43.market, Market::CnBj);
     }
 
     #[test]

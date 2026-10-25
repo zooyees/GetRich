@@ -13,6 +13,7 @@ pub fn start_run(conn: &Connection, kind: &str, source: &str) -> Result<i64, DbE
     Ok(conn.last_insert_rowid())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn finish_run(
     conn: &Connection,
     run_id: i64,
@@ -57,9 +58,7 @@ pub fn get_run(conn: &Connection, run_id: i64) -> Result<Option<IngestRun>, DbEr
         FROM ingest_runs WHERE id = ?1
         "#,
     )?;
-    let row = stmt
-        .query_row(params![run_id], map_run)
-        .optional()?;
+    let row = stmt.query_row(params![run_id], map_run).optional()?;
     Ok(row)
 }
 

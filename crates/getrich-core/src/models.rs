@@ -209,7 +209,11 @@ pub struct ListingSnapshot {
 }
 
 impl ListingSnapshot {
-    pub fn equity(key: InstrumentKey, source: impl Into<String>, source_symbol: impl Into<String>) -> Self {
+    pub fn equity(
+        key: InstrumentKey,
+        source: impl Into<String>,
+        source_symbol: impl Into<String>,
+    ) -> Self {
         let market = key.market;
         Self {
             key,
@@ -257,10 +261,25 @@ pub struct BarSnapshot {
 impl BarSnapshot {
     pub fn is_valid(&self) -> bool {
         self.open.is_finite()
+            && self.open > 0.0
             && self.high.is_finite()
             && self.low.is_finite()
             && self.close.is_finite()
+            && self.close > 0.0
+            && self.adj_close.map(f64::is_finite).unwrap_or(true)
+            && self
+                .volume
+                .map(|v| v.is_finite() && v >= 0.0)
+                .unwrap_or(true)
+            && self
+                .turnover
+                .map(|v| v.is_finite() && v >= 0.0)
+                .unwrap_or(true)
             && self.high >= self.low
+            && self.high >= self.open
+            && self.high >= self.close
+            && self.low <= self.open
+            && self.low <= self.close
     }
 }
 
@@ -353,6 +372,19 @@ pub struct IngestReport {
     pub bars_upserted: u32,
     pub quotes_upserted: u32,
     pub errors: Vec<String>,
+    #[serde(default)]
+    pub counts: ImportCounts,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportCounts {
+    pub requested: u32,
+    pub inserted: u32,
+    pub updated: u32,
+    pub unchanged: u32,
+    pub stale: u32,
+    pub invalid: u32,
+    pub failed: u32,
 }
 
 #[cfg(test)]
@@ -372,5 +404,32 @@ mod tests {
         assert_eq!("1d".parse::<Timeframe>().unwrap(), Timeframe::D1);
         assert_eq!("1wk".parse::<Timeframe>().unwrap(), Timeframe::W1);
         assert_eq!(Timeframe::D1.dataset_key(), "bars:1d");
+    }
+
+    #[test]
+    fn bar_validation_rejects_impossible_ohlc_and_negative_flow() {
+        let base = BarSnapshot {
+            key: InstrumentKey {
+                symbol: "600519".into(),
+                market: Market::CnSh,
+            },
+            timeframe: Timeframe::D1,
+            ts: chrono::Utc::now(),
+            open: 10.0,
+            high: 11.0,
+            low: 9.0,
+            close: 10.5,
+            adj_close: Some(10.5),
+            volume: Some(100.0),
+            turnover: Some(1_000.0),
+            source: "test".into(),
+        };
+        assert!(base.is_valid());
+        let mut impossible = base.clone();
+        impossible.high = 10.0;
+        assert!(!impossible.is_valid());
+        let mut negative = base;
+        negative.volume = Some(-1.0);
+        assert!(!negative.is_valid());
     }
 }

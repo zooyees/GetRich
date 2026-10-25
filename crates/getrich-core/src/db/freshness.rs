@@ -90,17 +90,15 @@ pub fn watermark(
     Ok(row)
 }
 
-pub fn list_freshness(
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<FreshnessRow>, DbError> {
+pub fn list_freshness(conn: &Connection, limit: usize) -> Result<Vec<FreshnessRow>, DbError> {
     let limit = if limit == 0 { 200 } else { limit } as i64;
     let mut stmt = conn.prepare(
         r#"
-        SELECT f.instrument_id, l.symbol, l.market, f.dataset, f.source,
+        SELECT f.instrument_id, COALESCE(l.symbol, '_MARKET'), COALESCE(l.market, 'CN.SH'),
+               f.dataset, f.source,
                f.last_attempt_at, f.last_success_at, f.watermark_ts, f.status, f.error
         FROM data_freshness f
-        JOIN listings l ON l.id = f.instrument_id
+        LEFT JOIN listings l ON l.id = f.instrument_id
         ORDER BY f.last_attempt_at DESC
         LIMIT ?1
         "#,
@@ -124,4 +122,25 @@ pub fn list_freshness(
         out.push(row?);
     }
     Ok(out)
+}
+
+pub fn latest_success(
+    conn: &Connection,
+    dataset: &str,
+    source: &str,
+) -> Result<Option<String>, DbError> {
+    let row: Option<String> = conn
+        .query_row(
+            r#"
+            SELECT last_success_at FROM data_freshness
+            WHERE dataset = ?1 AND source = ?2 AND last_success_at IS NOT NULL
+            ORDER BY last_success_at DESC
+            LIMIT 1
+            "#,
+            params![dataset, source],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(row)
 }

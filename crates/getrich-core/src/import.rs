@@ -9,14 +9,15 @@ use crate::models::{
     BarSnapshot, IngestReport, InstrumentKey, ListingSnapshot, MetadataEntry, QuoteSnapshot,
     Timeframe,
 };
+use crate::session;
 use crate::symbol::parse_instrument;
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ImportBundle {
     #[serde(default)]
     pub listings: Vec<ListingImport>,
@@ -26,7 +27,7 @@ pub struct ImportBundle {
     pub bars: Vec<BarImport>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ListingImport {
     pub symbol: String,
     #[serde(default)]
@@ -61,7 +62,7 @@ pub struct ListingImport {
     pub metadata: Vec<MetadataEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct QuoteImport {
     pub symbol: String,
     #[serde(default)]
@@ -88,7 +89,7 @@ pub struct QuoteImport {
     pub source: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BarImport {
     pub symbol: String,
     #[serde(default)]
@@ -208,7 +209,11 @@ pub fn parse_csv(text: &str, kind: ImportKind) -> Result<ImportBundle, AppError>
     }
 }
 
-pub fn apply_bundle(db: &Database, bundle: &ImportBundle, source: &str) -> Result<IngestReport, AppError> {
+pub fn apply_bundle(
+    db: &Database,
+    bundle: &ImportBundle,
+    source: &str,
+) -> Result<IngestReport, AppError> {
     let conn = db.connect()?;
     apply_bundle_conn(&conn, bundle, source)
 }
@@ -218,7 +223,212 @@ pub fn apply_bundle_conn(
     bundle: &ImportBundle,
     source: &str,
 ) -> Result<IngestReport, AppError> {
-    let kind = if !bundle.listings.is_empty() && bundle.quotes.is_empty() && bundle.bars.is_empty() {
+    let tx = conn.unchecked_transaction().map_err(db::DbError::from)?;
+    let report = apply_bundle_in(&tx, bundle, source)?;
+    let source_times: Vec<DateTime<Utc>> = bundle
+        .quotes
+        .iter()
+        .filter_map(|quote| parse_ts(&quote.ts).ok())
+        .collect();
+    let batch = crate::realtime::CommittedBatch {
+        source: source.into(),
+        requested: bundle.quotes.len() as u32,
+        accepted: report.quotes_upserted,
+        changed: report.quotes_upserted,
+        invalid: report.errors.len() as u32,
+        min_source_at: source_times.iter().min().map(DateTime::to_rfc3339),
+        max_source_at: source_times.iter().max().map(DateTime::to_rfc3339),
+        committed_at: db::now_rfc3339(),
+        ..crate::realtime::CommittedBatch::default()
+    };
+    db::insert_ingest_batch(&tx, &batch)?;
+    tx.commit().map_err(db::DbError::from)?;
+    Ok(report)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HotWriteReport {
+    pub batch_version: u64,
+    pub requested: u32,
+    pub accepted: u32,
+    pub changed: u32,
+    pub unchanged: u32,
+    pub stale: u32,
+    pub invalid: u32,
+    pub missing_listing: u32,
+    pub quotes_upserted: u32,
+    pub bars_upserted: u32,
+    pub skipped_missing: u32,
+    pub watermark: Option<String>,
+}
+
+/// Incremental quotes/bars for listings that already exist. No ingest_runs, no ensure_listing.
+pub fn apply_quotes_hot(
+    db: &Database,
+    quotes: &[QuoteImport],
+    bars: &[BarImport],
+    source: &str,
+    batch_size: u32,
+) -> Result<HotWriteReport, AppError> {
+    let conn = db.connect()?;
+    apply_quotes_hot_conn(&conn, quotes, bars, source, batch_size)
+}
+
+pub fn apply_quotes_hot_conn(
+    conn: &Connection,
+    quotes: &[QuoteImport],
+    bars: &[BarImport],
+    source: &str,
+    _batch_size: u32,
+) -> Result<HotWriteReport, AppError> {
+    let ids = db::list_listing_ids(conn)?;
+    let mut report = HotWriteReport {
+        requested: quotes.len().max(bars.len()) as u32,
+        ..HotWriteReport::default()
+    };
+    let mut max_ts: Option<DateTime<Utc>> = None;
+
+    let mut quote_snaps: Vec<(i64, QuoteSnapshot)> = Vec::new();
+    for row in quotes {
+        match quote_snapshot(row, source) {
+            Ok(snap) => {
+                let key = (
+                    snap.key.symbol.clone(),
+                    snap.key.market.as_str().to_string(),
+                );
+                if let Some(id) = ids.get(&key) {
+                    if max_ts.map(|t| snap.ts > t).unwrap_or(true) {
+                        max_ts = Some(snap.ts);
+                    }
+                    quote_snaps.push((*id, snap));
+                } else {
+                    report.skipped_missing += 1;
+                    report.missing_listing += 1;
+                }
+            }
+            Err(_) => {
+                report.skipped_missing += 1;
+                report.invalid += 1;
+            }
+        }
+    }
+
+    let mut bar_snaps: Vec<(i64, BarSnapshot)> = Vec::new();
+    for row in bars {
+        match bar_snapshot(row, source) {
+            Ok(snap) => {
+                let key = (
+                    snap.key.symbol.clone(),
+                    snap.key.market.as_str().to_string(),
+                );
+                if let Some(id) = ids.get(&key) {
+                    bar_snaps.push((*id, snap));
+                } else {
+                    report.skipped_missing += 1;
+                    report.missing_listing += 1;
+                }
+            }
+            Err(_) => {
+                report.skipped_missing += 1;
+                report.invalid += 1;
+            }
+        }
+    }
+    use std::collections::HashMap;
+    let mut grouped: HashMap<i64, Vec<BarSnapshot>> = HashMap::new();
+    for (id, snap) in bar_snaps {
+        grouped.entry(id).or_default().push(snap);
+    }
+    let tx = conn.unchecked_transaction().map_err(db::DbError::from)?;
+    let mut changed_ids = Vec::new();
+    for (id, snap) in &quote_snaps {
+        match db::upsert_quote_outcome(&tx, *id, snap)? {
+            db::QuoteWriteOutcome::Inserted | db::QuoteWriteOutcome::Changed => {
+                report.accepted += 1;
+                report.changed += 1;
+                report.quotes_upserted += 1;
+                changed_ids.push(*id);
+            }
+            db::QuoteWriteOutcome::Unchanged => {
+                report.accepted += 1;
+                report.unchanged += 1;
+            }
+            db::QuoteWriteOutcome::Stale => report.stale += 1,
+        }
+    }
+    for (id, snaps) in grouped {
+        report.bars_upserted += db::upsert_bars_on(&tx, id, &snaps)?;
+    }
+    let batch = crate::realtime::CommittedBatch {
+        source: source.into(),
+        requested: report.requested,
+        accepted: report.accepted,
+        changed: report.changed,
+        unchanged: report.unchanged,
+        stale: report.stale,
+        invalid: report.invalid,
+        missing_listing: report.missing_listing,
+        min_source_at: quote_snaps
+            .iter()
+            .map(|(_, q)| q.ts)
+            .min()
+            .map(|ts| ts.to_rfc3339()),
+        max_source_at: quote_snaps
+            .iter()
+            .map(|(_, q)| q.ts)
+            .max()
+            .map(|ts| ts.to_rfc3339()),
+        changed_ids,
+        committed_at: db::now_rfc3339(),
+        ..crate::realtime::CommittedBatch::default()
+    };
+    report.batch_version = db::insert_ingest_batch(&tx, &batch)?;
+    tx.commit().map_err(db::DbError::from)?;
+
+    if let Some(ts) = max_ts {
+        report.watermark = Some(ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    Ok(report)
+}
+
+impl HotWriteReport {
+    pub fn as_ingest(&self, source: &str) -> IngestReport {
+        IngestReport {
+            run_id: 0,
+            kind: "quotes_hot".into(),
+            source: source.into(),
+            status: if self.skipped_missing == 0 {
+                "ok".into()
+            } else {
+                "partial".into()
+            },
+            instruments_upserted: 0,
+            bars_upserted: self.bars_upserted,
+            quotes_upserted: self.quotes_upserted,
+            errors: if self.skipped_missing == 0 {
+                Vec::new()
+            } else {
+                vec![format!("skipped_missing={}", self.skipped_missing)]
+            },
+            counts: crate::models::ImportCounts {
+                requested: self.requested,
+                updated: self.changed,
+                unchanged: self.unchanged,
+                stale: self.stale,
+                invalid: self.invalid,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+fn apply_bundle_in(
+    conn: &Connection,
+    bundle: &ImportBundle,
+    source: &str,
+) -> Result<IngestReport, AppError> {
+    let kind = if !bundle.listings.is_empty() && bundle.quotes.is_empty() && bundle.bars.is_empty()
+    {
         "listings"
     } else if bundle.listings.is_empty() && !bundle.quotes.is_empty() && bundle.bars.is_empty() {
         "quotes"
@@ -232,52 +442,89 @@ pub fn apply_bundle_conn(
     let mut instruments = 0u32;
     let mut quotes = 0u32;
     let mut bars = 0u32;
+    let mut counts = crate::models::ImportCounts {
+        requested: (bundle.listings.len() + bundle.quotes.len() + bundle.bars.len()) as u32,
+        ..Default::default()
+    };
 
-    for row in &bundle.listings {
+    let reject = |dataset: &str,
+                  index: usize,
+                  symbol: &str,
+                  reason: String,
+                  errors: &mut Vec<String>|
+     -> Result<(), AppError> {
+        let message = format!("{dataset} 第 {} 行 {symbol}：{reason}", index + 1);
+        conn.execute("INSERT INTO ingest_rejections(run_id,dataset,row_number,symbol,reason,created_at) VALUES (?1,?2,?3,?4,?5,?6)",
+            rusqlite::params![run_id,dataset,index+1,symbol,reason,db::now_rfc3339()]).map_err(db::DbError::from)?;
+        errors.push(message);
+        Ok(())
+    };
+    for (index, row) in bundle.listings.iter().enumerate() {
         match listing_snapshot(row, source) {
-            Ok(snap) => match db::upsert_listing(conn, &snap) {
-                Ok(_) => instruments += 1,
-                Err(e) => errors.push(format!("{}: {e}", snap.key.display())),
-            },
-            Err(e) => errors.push(e),
+            Ok(snap) => {
+                let before = db::get_listing(conn, &snap.key)?
+                    .map(|listing| listing_content(conn, &listing))
+                    .transpose()?;
+                let id = db::upsert_listing(conn, &snap)?;
+                let after = db::get_listing_by_id(conn, id)?
+                    .ok_or_else(|| AppError::Message("写入标的后未找到记录".into()))?;
+                let after = listing_content(conn, &after)?;
+                if let Some(before) = before {
+                    if before == after {
+                        counts.unchanged += 1;
+                    } else {
+                        instruments += 1;
+                        counts.updated += 1;
+                    }
+                } else {
+                    instruments += 1;
+                    counts.inserted += 1;
+                }
+            }
+            Err(e) => reject("listings", index, &row.symbol, e, &mut errors)?,
         }
     }
-
-    for row in &bundle.quotes {
+    for (index, row) in bundle.quotes.iter().enumerate() {
         match quote_snapshot(row, source) {
-            Ok(snap) => match ensure_listing(conn, &snap.key, source) {
-                Ok(id) => match db::upsert_quote(conn, id, &snap) {
-                    Ok(()) => quotes += 1,
-                    Err(e) => errors.push(format!("{}: {e}", snap.key.display())),
-                },
-                Err(e) => errors.push(e.to_string()),
-            },
-            Err(e) => errors.push(e),
+            Ok(snap) => {
+                let id = ensure_listing(conn, &snap.key, source)?;
+                match db::upsert_quote_outcome(conn, id, &snap)? {
+                    db::QuoteWriteOutcome::Inserted => {
+                        quotes += 1;
+                        counts.inserted += 1;
+                    }
+                    db::QuoteWriteOutcome::Changed => {
+                        quotes += 1;
+                        counts.updated += 1;
+                    }
+                    db::QuoteWriteOutcome::Unchanged => counts.unchanged += 1,
+                    db::QuoteWriteOutcome::Stale => counts.stale += 1,
+                }
+            }
+            Err(e) => reject("quotes", index, &row.symbol, e, &mut errors)?,
         }
     }
-
-    let mut bar_snaps: Vec<(i64, BarSnapshot)> = Vec::new();
-    for row in &bundle.bars {
+    for (index, row) in bundle.bars.iter().enumerate() {
         match bar_snapshot(row, source) {
-            Ok(snap) => match ensure_listing(conn, &snap.key, source) {
-                Ok(id) => bar_snaps.push((id, snap)),
-                Err(e) => errors.push(e.to_string()),
-            },
-            Err(e) => errors.push(e),
+            Ok(snap) => {
+                let id = ensure_listing(conn, &snap.key, source)?;
+                let ts = db::bar_ts_key(snap.ts, !snap.timeframe.is_intraday());
+                let existed:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM bars WHERE instrument_id=?1 AND timeframe=?2 AND ts=?3)",
+                    rusqlite::params![id,snap.timeframe.as_str(),ts],|r|r.get(0)).map_err(db::DbError::from)?;
+                let n = db::upsert_bars_on(conn, id, &[snap])?;
+                bars += n;
+                if n == 0 {
+                    counts.unchanged += 1;
+                } else if existed {
+                    counts.updated += 1;
+                } else {
+                    counts.inserted += 1;
+                }
+            }
+            Err(e) => reject("bars", index, &row.symbol, e, &mut errors)?,
         }
     }
-    use std::collections::HashMap;
-    let mut grouped: HashMap<i64, Vec<BarSnapshot>> = HashMap::new();
-    for (id, snap) in bar_snaps {
-        grouped.entry(id).or_default().push(snap);
-    }
-    for (id, snaps) in grouped {
-        match db::upsert_bars(conn, id, &snaps) {
-            Ok(n) => bars += n,
-            Err(e) => errors.push(e.to_string()),
-        }
-    }
-
+    counts.invalid = errors.len() as u32;
     let status = if errors.is_empty() { "ok" } else { "partial" };
     let detail = serde_json::json!({ "errors": errors }).to_string();
     db::finish_run(
@@ -300,6 +547,7 @@ pub fn apply_bundle_conn(
         bars_upserted: bars,
         quotes_upserted: quotes,
         errors,
+        counts,
     })
 }
 
@@ -327,6 +575,9 @@ fn listing_snapshot(row: &ListingImport, default_source: &str) -> Result<Listing
     }
     snap.isin = row.isin.clone();
     snap.listing_date = row.listing_date.clone();
+    if let Some(value) = row.listing_date.as_deref() {
+        snap.listing_date = Some(crate::validation::date(value)?);
+    }
     if let Some(s) = &row.status {
         snap.status = s.clone();
     }
@@ -339,7 +590,8 @@ fn listing_snapshot(row: &ListingImport, default_source: &str) -> Result<Listing
 
 fn quote_snapshot(row: &QuoteImport, default_source: &str) -> Result<QuoteSnapshot, String> {
     let key = parse_instrument(&row.symbol, row.market.as_deref())?;
-    Ok(QuoteSnapshot {
+    validate_market_timestamp(&row.ts, &key)?;
+    let snap = QuoteSnapshot {
         key,
         ts: parse_ts(&row.ts)?,
         last: row.last,
@@ -352,17 +604,20 @@ fn quote_snapshot(row: &QuoteImport, default_source: &str) -> Result<QuoteSnapsh
         change_pct: row.change_pct,
         currency: row.currency.clone(),
         source: row.source.clone().unwrap_or_else(|| default_source.into()),
-    })
+    };
+    crate::validation::quote(&snap)?;
+    Ok(snap)
 }
 
 fn bar_snapshot(row: &BarImport, default_source: &str) -> Result<BarSnapshot, String> {
     let key = parse_instrument(&row.symbol, row.market.as_deref())?;
+    validate_market_timestamp(&row.ts, &key)?;
     let timeframe = row
         .timeframe
         .as_deref()
         .unwrap_or("1d")
         .parse::<Timeframe>()?;
-    Ok(BarSnapshot {
+    let snap = BarSnapshot {
         key,
         timeframe,
         ts: parse_ts(&row.ts)?,
@@ -374,24 +629,66 @@ fn bar_snapshot(row: &BarImport, default_source: &str) -> Result<BarSnapshot, St
         volume: row.volume,
         turnover: row.turnover,
         source: row.source.clone().unwrap_or_else(|| default_source.into()),
-    })
+    };
+    if !snap.is_valid() {
+        return Err(format!("{}: K 线 OHLC/量额无效", snap.key.display()));
+    }
+    Ok(snap)
+}
+
+fn listing_content(
+    conn: &Connection,
+    listing: &crate::models::Instrument,
+) -> Result<serde_json::Value, AppError> {
+    let mut content =
+        serde_json::to_value(listing).map_err(|e| AppError::Message(e.to_string()))?;
+    if let Some(object) = content.as_object_mut() {
+        object.remove("created_at");
+        object.remove("updated_at");
+    }
+    content["metadata"] = serde_json::to_value(db::list_metadata(conn, listing.id)?)
+        .map_err(|e| AppError::Message(e.to_string()))?;
+    Ok(content)
+}
+
+pub fn preview(
+    db: &Database,
+    bundle: &ImportBundle,
+    source: &str,
+) -> Result<serde_json::Value, AppError> {
+    use std::hash::{Hash, Hasher};
+    let mut conn = db.connect()?;
+    let transaction = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(db::DbError::from)?;
+    let report = apply_bundle_in(&transaction, bundle, source)?;
+    let errors = {
+        let mut stmt=transaction.prepare("SELECT dataset,row_number,symbol,reason FROM ingest_rejections WHERE run_id=?1 ORDER BY id").map_err(db::DbError::from)?;
+        let rows=stmt.query_map([report.run_id],|r|Ok(serde_json::json!({"dataset":r.get::<_,String>(0)?,"row":r.get::<_,u32>(1)?,"symbol":r.get::<_,Option<String>>(2)?,"message":r.get::<_,String>(3)?}))).map_err(db::DbError::from)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(db::DbError::from)?
+    };
+    transaction.rollback().map_err(db::DbError::from)?;
+    let text = serde_json::to_string(bundle).map_err(|e| AppError::Message(e.to_string()))?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hash);
+    Ok(
+        serde_json::json!({"can_apply":report.counts.requested>report.counts.invalid,"counts":report.counts,"errors":errors,"fingerprint":format!("{:016x}",hash.finish()),"preview":true}),
+    )
+}
+
+fn validate_market_timestamp(raw: &str, key: &InstrumentKey) -> Result<(), String> {
+    if key.market == crate::models::Market::Us
+        && raw.trim().len() > 10
+        && DateTime::parse_from_rfc3339(raw.trim()).is_err()
+    {
+        return Err("美股盘中时间必须使用带时区偏移的 RFC3339，例如 2026-10-23T16:00:00-04:00；日线可使用 YYYY-MM-DD".into());
+    }
+    Ok(())
 }
 
 pub fn parse_ts(raw: &str) -> Result<DateTime<Utc>, String> {
-    let s = raw.trim();
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
-    }
-    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let ndt = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| format!("invalid date: {s}"))?;
-        return Ok(Utc.from_utc_datetime(&ndt));
-    }
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(Utc.from_utc_datetime(&dt));
-    }
-    Err(format!("invalid timestamp (use RFC3339 or YYYY-MM-DD): {s}"))
+    session::parse_cn_ts(raw)
 }
 
 fn csv_listings(text: &str) -> Result<Vec<ListingImport>, AppError> {
@@ -399,7 +696,11 @@ fn csv_listings(text: &str) -> Result<Vec<ListingImport>, AppError> {
     let idx = |name: &str| header.iter().position(|h| h.eq_ignore_ascii_case(name));
     let mut out = Vec::new();
     for cols in rows {
-        let get = |name: &str| idx(name).and_then(|i| cols.get(i)).and_then(nonempty);
+        let get = |name: &str| {
+            idx(name)
+                .and_then(|i| cols.get(i))
+                .and_then(|value| nonempty(value))
+        };
         let Some(symbol) = get("symbol") else {
             continue;
         };
@@ -430,7 +731,11 @@ fn csv_quotes(text: &str) -> Result<Vec<QuoteImport>, AppError> {
     let idx = |name: &str| header.iter().position(|h| h.eq_ignore_ascii_case(name));
     let mut out = Vec::new();
     for cols in rows {
-        let get = |name: &str| idx(name).and_then(|i| cols.get(i)).and_then(nonempty);
+        let get = |name: &str| {
+            idx(name)
+                .and_then(|i| cols.get(i))
+                .and_then(|value| nonempty(value))
+        };
         let num = |name: &str| get(name).and_then(|s| s.parse().ok());
         let Some(symbol) = get("symbol") else {
             continue;
@@ -465,7 +770,11 @@ fn csv_bars(text: &str) -> Result<Vec<BarImport>, AppError> {
     let idx = |name: &str| header.iter().position(|h| h.eq_ignore_ascii_case(name));
     let mut out = Vec::new();
     for cols in rows {
-        let get = |name: &str| idx(name).and_then(|i| cols.get(i)).and_then(nonempty);
+        let get = |name: &str| {
+            idx(name)
+                .and_then(|i| cols.get(i))
+                .and_then(|value| nonempty(value))
+        };
         let num = |name: &str| get(name).and_then(|s| s.parse().ok());
         let Some(symbol) = get("symbol") else {
             continue;
@@ -542,7 +851,7 @@ fn split_csv_line(line: &str) -> Vec<String> {
     out
 }
 
-fn nonempty(s: &String) -> Option<String> {
+fn nonempty(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {
         None
@@ -576,10 +885,108 @@ mod tests {
         assert_eq!(r1.instruments_upserted, 1);
         assert_eq!(r1.quotes_upserted, 1);
         assert_eq!(r1.bars_upserted, 1);
-        assert_eq!(r2.instruments_upserted, 1);
-        assert_eq!(r2.quotes_upserted, 1);
-        assert_eq!(r2.bars_upserted, 1);
+        assert_eq!(r2.instruments_upserted, 0);
+        assert_eq!(r2.quotes_upserted, 0);
+        assert_eq!(r2.bars_upserted, 0);
+        assert_eq!(r2.counts.unchanged, 3);
         assert_eq!(db::count_bars(&conn, 1, Timeframe::D1).unwrap(), 1);
+    }
+
+    #[test]
+    fn naive_datetime_is_shanghai() {
+        let ts = parse_ts("2026-09-11 10:00:00").unwrap();
+        assert_eq!(
+            ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "2026-09-11T02:00:00Z"
+        );
+    }
+
+    #[test]
+    fn hot_write_skips_missing_and_skips_ingest_runs() {
+        let json = r#"{
+          "listings":[{"symbol":"600519","market":"CN.SH","name":"贵州茅台"}],
+          "quotes":[{"symbol":"600519","market":"CN.SH","ts":"2024-01-02","last":10}]
+        }"#;
+        let bundle = parse_json(json, ImportKind::Bundle).unwrap();
+        let conn = open_memory().unwrap();
+        apply_bundle_conn(&conn, &bundle, "test").unwrap();
+        let runs_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ingest_runs", [], |r| r.get(0))
+            .unwrap();
+
+        let quotes = vec![
+            QuoteImport {
+                symbol: "600519".into(),
+                market: Some("CN.SH".into()),
+                ts: "2026-09-11 10:00:00".into(),
+                last: 12.0,
+                open: Some(11.0),
+                high: Some(12.5),
+                low: Some(11.0),
+                prev_close: Some(10.0),
+                volume: Some(55_845_293.0),
+                turnover: Some(1.0),
+                change_pct: Some(20.0),
+                currency: Some("CNY".into()),
+                source: Some("tushare".into()),
+            },
+            QuoteImport {
+                symbol: "999999".into(),
+                market: Some("CN.SH".into()),
+                ts: "2026-09-11 10:00:00".into(),
+                last: 1.0,
+                open: None,
+                high: None,
+                low: None,
+                prev_close: None,
+                volume: None,
+                turnover: None,
+                change_pct: None,
+                currency: None,
+                source: None,
+            },
+        ];
+        let bars = vec![BarImport {
+            symbol: "600519".into(),
+            market: Some("CN.SH".into()),
+            timeframe: Some("1d".into()),
+            ts: "2026-09-11".into(),
+            open: 11.0,
+            high: 12.5,
+            low: 11.0,
+            close: 12.0,
+            adj_close: None,
+            volume: Some(55_845_293.0),
+            turnover: Some(1.0),
+            source: Some("tushare".into()),
+        }];
+        let hot = apply_quotes_hot_conn(&conn, &quotes, &bars, "tushare", 500).unwrap();
+        assert_eq!(hot.quotes_upserted, 1);
+        assert_eq!(hot.bars_upserted, 1);
+        assert_eq!(hot.skipped_missing, 1);
+        assert_eq!(hot.accepted, 1);
+        assert_eq!(hot.changed, 1);
+        assert_eq!(hot.missing_listing, 1);
+        assert!(hot.batch_version > 0);
+        let runs_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM ingest_runs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(runs_after, runs_before);
+        let vol: f64 = conn
+            .query_row(
+                "SELECT volume FROM quotes q JOIN listings l ON l.id = q.instrument_id WHERE l.symbol='600519'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(vol, 55_845_293.0);
+        let again = apply_quotes_hot_conn(&conn, &quotes[..1], &bars, "tushare", 500).unwrap();
+        assert_eq!(again.quotes_upserted, 0);
+        assert_eq!(again.unchanged, 1);
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM quotes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

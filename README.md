@@ -2,13 +2,15 @@
 
 **[中文](#中文)** · **[English](#english)**
 
-股票分析系统基座（Rust）：配置 / SQLite / 导入约定 / 同花顺风格行情展示。当前版本 **0.1.0**。架构对齐 [WiParse](https://github.com/zooyees/WiParse)（`*-core` + JSON CLI + localhost API + GUI 图标接线）。本阶段不含策略、信号或在线拉数。
+股票分析系统基座（Rust）：配置 / SQLite / 导入约定 / 同花顺风格行情展示。当前版本 **0.2.3**。架构对齐 [WiParse](https://github.com/zooyees/WiParse)（`*-core` + JSON CLI + localhost API + GUI 图标接线）。本阶段不含策略或信号。A 股可通过 TuShare `rt_k` 在交易时段刷新报价。
 
-Stock analysis foundation (Rust): config / SQLite / import contract / Tonghuashun-style quote board. **0.1.0**. No strategies, signals, or live scraping in this release.
+Stock analysis foundation (Rust): config / SQLite / import contract / Tonghuashun-style quote board. **0.2.3**. No strategies or signals. A-share quotes can refresh in session via TuShare `rt_k`.
 
 ---
 
 ## 中文
+
+0.2.3 修正星图底栏、个股详情跳转并增加自选搜索，见 [本版说明](docs/RELEASE_0.2.3.md)。0.2.2 增加完整历史补全、分时、F10、资金与公告资料，星图使用全宽主画布并支持后台采集刷新，见 [本版说明](docs/RELEASE_0.2.2.md)。前版已修正桌面布局、设置分区与空状态；0.2.0 已按全页面评估改造行情口径、异步任务、页面交互与稳定性；两端界面重设计，市场态势升级为行业大盘星图，支持同日市值、成交额、等面积、缩放下钻与来源追溯。见 [开发与验收说明](docs/WORKSTATION_IMPLEMENTATION_2026-10-25.md)。
 
 ### 能做什么
 
@@ -66,13 +68,13 @@ cargo run -p getrich-gui
 ### 导入后再看
 
 ```bash
-cargo run -p getrich-cli -- import bundle --file docs/examples/import.bundle.json
+cargo run -p getrich-cli -- import bundle --file docs/examples/demo.board.json
 cargo run -p getrich-cli -- stock show --symbol 600519 --market CN.SH --pretty
 ```
 
-字段约定：[`docs/IMPORT.md`](docs/IMPORT.md)。CLI：[`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)。API：[`docs/DEPLOY_API.md`](docs/DEPLOY_API.md)。打包：[`docs/PACKAGING.md`](docs/PACKAGING.md)。
+字段约定：[`docs/IMPORT.md`](docs/IMPORT.md)。CLI：[`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md)。API：[`docs/DEPLOY_API.md`](docs/DEPLOY_API.md)。打包：[`docs/PACKAGING.md`](docs/PACKAGING.md)。审查落实：[`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md)。
 
-环境变量：`GETRICH_CONFIG`、`GETRICH_DB`、`GETRICH_DATA_ROOT`、`GETRICH_API_BIND`、`GETRICH_URL`。
+环境变量：`GETRICH_CONFIG`、`GETRICH_DB`、`GETRICH_DATA_ROOT`、`GETRICH_API_BIND`、`GETRICH_URL`、`GETRICH_TUSHARE_TOKEN`、`GETRICH_TUSHARE_USER`。盘中刷新：`config.json` 里 `data.tushare.enabled=true`（默认关闭）。
 
 ### Windows exe
 
@@ -80,7 +82,7 @@ cargo run -p getrich-cli -- stock show --symbol 600519 --market CN.SH --pretty
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\pack-windows.ps1
-# dist\GetRich.exe
+# dist\GetRich-Windows-0.2.3-YYYYMMDD.zip
 ```
 
 图标：将官方 `D:\windlink\windlink\GetRich\icon\GetRich.ico` 覆盖仓库 `icon/GetRich.ico` 后重新打包。
@@ -94,8 +96,8 @@ Foundation only: typed SQLite store, migrations, file import, quote board UI. Yo
 ```bash
 cargo run -p getrich-cli -- serve --bind 127.0.0.1:7878
 cargo run -p getrich-gui
-cargo run -p getrich-cli -- import bundle --file docs/examples/import.bundle.json
+cargo run -p getrich-cli -- import bundle --file docs/examples/demo.board.json
 cargo run -p getrich-cli -- stock list --pretty
 ```
 
-Import contract: [`docs/IMPORT.md`](docs/IMPORT.md). Packaging: [`docs/PACKAGING.md`](docs/PACKAGING.md).
+Import contract: [`docs/IMPORT.md`](docs/IMPORT.md). Packaging: [`docs/PACKAGING.md`](docs/PACKAGING.md). Review handoff: [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md).

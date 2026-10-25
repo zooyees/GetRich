@@ -1,111 +1,66 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GetRich</title>
-    <link rel="icon" href="/favicon.ico" />
-    <link rel="stylesheet" href="/app.css" />
-  </head>
-  <body>
-    <div id="app">
-      <header class="topbar">
-        <a class="brand" href="#/" aria-label="GetRich 主页">GetRich</a>
-        <nav class="nav" aria-label="主导航">
-          <a href="#/" data-route="home">主页</a>
-          <a href="#/quotes" data-route="quotes">行情</a>
-        </nav>
-        <p id="status-pill" class="pill">连接中</p>
-      </header>
-
-      <main>
-        <section id="view-home" class="view view-home" hidden>
-          <div class="home-hero">
-            <p class="home-kicker">行情工作站</p>
-            <h1>看盘，从这里开始。</h1>
-            <p class="home-lead">报价、明细与 K 线。数据由你导入，软件只负责呈现。</p>
-            <div class="home-actions">
-              <a class="btn btn-primary" href="#/quotes">打开行情</a>
-            </div>
-            <dl class="home-stats" id="home-stats">
-              <div>
-                <dt>标的</dt>
-                <dd id="home-listings">—</dd>
-              </div>
-              <div>
-                <dt>报价</dt>
-                <dd id="home-quotes">—</dd>
-              </div>
-              <div>
-                <dt>日线</dt>
-                <dd id="home-bars">—</dd>
-              </div>
-            </dl>
-            <p class="home-note" id="home-note"></p>
-          </div>
-        </section>
-
-        <section id="view-quotes" class="view" hidden>
-          <div class="page-head">
-            <div>
-              <h1>行情</h1>
-              <p class="page-sub">沪深京 · 创业板 · 科创板 · 港股 · 美股</p>
-            </div>
-            <label class="field field-search">
-              <span>搜索</span>
-              <input id="quote-search" type="search" placeholder="名称 / 代码" autocomplete="off" />
-            </label>
-          </div>
-          <nav id="boards" class="boards" aria-label="板块"></nav>
-          <div id="quote-flash" class="flash" hidden></div>
-          <div class="table-wrap" id="quote-table-wrap" hidden>
-            <table class="quote-table">
-              <thead>
-                <tr>
-                  <th data-sort="symbol">代码</th>
-                  <th>名称</th>
-                  <th>最新</th>
-                  <th data-sort="change_pct">涨幅%</th>
-                  <th>涨跌</th>
-                  <th>今开</th>
-                  <th>最高</th>
-                  <th>最低</th>
-                  <th>昨收</th>
-                  <th data-sort="volume">成交量</th>
-                  <th data-sort="turnover">成交额</th>
-                  <th>振幅%</th>
-                  <th>市场</th>
-                  <th>板块</th>
-                </tr>
-              </thead>
-              <tbody id="quote-body"></tbody>
-            </table>
-          </div>
-          <p class="hint" id="quote-hint">方向键选择 · Enter 明细 · / 搜索</p>
-        </section>
-
-        <section id="view-detail" class="view" hidden>
-          <div class="page-head">
-            <div>
-              <a class="back" href="#/quotes">行情</a>
-              <h1 id="detail-name">—</h1>
-              <p id="detail-code" class="page-sub">—</p>
-            </div>
-          </div>
-          <div id="detail-flash" class="flash" hidden></div>
-          <div class="quote-strip" id="quote-strip"></div>
-          <div class="kline-bar">
-            <div class="seg" id="tf-tabs" role="tablist">
-              <button type="button" data-tf="1d" class="active">日K</button>
-              <button type="button" data-tf="1w">周K</button>
-              <button type="button" data-tf="1mo">月K</button>
-            </div>
-            <p class="kline-meta" id="kline-meta"></p>
-          </div>
-          <canvas id="kline" width="1200" height="420" aria-label="K线图"></canvas>
-        </section>
-      </main>
-    </div>
-    <script src="/app.js"></script>
-  </body>
-</html>
+<html lang="zh-CN" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GetRich 行情工作站</title><link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/app.css"></head>
+<body>
+<header class="topbar"><div class="header-inner">
+<nav class="nav" aria-label="主导航"><a href="#/quotes" data-route="quotes">行情</a><a href="#/pulse" data-route="pulse">市场态势</a><a href="#/data" data-route="data">数据</a><a href="#/settings" data-route="settings">设置</a></nav>
+<label id="search-wrap" class="search"><span class="sr-only">搜索名称或代码</span><input id="quote-search" type="search" placeholder="名称或代码  /" autocomplete="off"></label>
+<div class="header-status"><span id="connection" class="status-dot">连接中</span><span id="status-pill">正在读取本地数据</span></div>
+</div></header>
+<div id="notice" role="status" aria-live="polite" hidden></div>
+<main id="app">
+<div id="workspace" class="workspace">
+<section id="view-quotes" class="pane pane-list" aria-label="行情列表"><div class="pane-heading"><div><span class="eyebrow">QUOTES</span><h2>市场行情</h2></div><a class="text-link" href="#/pulse">打开大盘星图 ↗</a></div>
+<nav id="boards" class="boards" aria-label="市场与板块"></nav>
+<div class="filter-row"><label>涨跌<select id="change-filter"><option value="">全部</option><option value="up">上涨</option><option value="down">下跌</option><option value="flat">平盘</option><option value="limit_up">涨停估算</option><option value="limit_down">跌停估算</option></select></label><span id="industry-filter"></span><button id="clear-filters" class="quiet" type="button">清除条件</button></div>
+<div id="quote-flash" class="flash" hidden></div>
+<div class="table-wrap"><table class="quote-table" aria-label="行情表"><thead><tr id="quote-head"><th><button data-sort="symbol">代码</button></th><th><button data-sort="name">名称</button></th><th class="num"><button data-sort="last">最新</button></th><th class="num"><button data-sort="change_pct">涨跌幅</button></th><th class="num"><button data-sort="change_amt">涨跌额</button></th><th class="num"><button data-sort="turnover">成交额</button></th><th class="num"><button data-sort="amplitude">振幅</button></th></tr></thead><tbody id="quote-body"></tbody></table></div>
+<div class="pagination"><p id="quote-foot"></p><button id="page-prev" type="button">上一页</button><button id="page-next" type="button">下一页</button></div>
+</section>
+<section id="view-detail" class="pane pane-detail" aria-label="股票详情">
+<a id="detail-back" class="back" href="#/quotes">← 返回行情</a>
+<div id="detail-flash" class="flash">选择一只股票查看详情</div>
+<div id="detail-content" hidden>
+<div class="detail-hero"><div><h1 id="detail-name"></h1><p id="detail-code" class="muted"></p><p id="detail-time" class="muted"></p></div><div class="detail-px"><strong id="detail-last"></strong><p id="detail-chg"></p><button id="watch-btn" type="button" aria-pressed="false" aria-label="加入自选">☆ 自选</button></div></div>
+<dl id="quote-strip" class="quote-strip"></dl>
+<nav id="research-tabs" class="segments" role="tablist" aria-label="股票研究"><button data-research="history" role="tab" aria-selected="true">行情走势</button><button data-research="f10" role="tab">F10 · 公司财务</button><button data-research="funds" role="tab">资金流向</button><button data-research="announcements" role="tab">公司公告</button></nav>
+<div class="research-actions"><button id="research-refresh">更新完整历史</button><span id="research-status" role="status"></span></div><div id="candle-panel">
+<div class="chart-toolbar"><div id="tf-tabs" class="segments" role="tablist" aria-label="K 线周期"><button data-tf="intraday" role="tab" aria-selected="false">分时</button><button data-tf="1d" role="tab" aria-selected="true">日K</button><button data-tf="1w" role="tab" aria-selected="false">周K</button><button data-tf="1mo" role="tab" aria-selected="false">月K</button></div><div class="chart-actions"><button id="chart-left" aria-label="查看更早 K 线">←</button><button id="chart-right" aria-label="查看更晚 K 线">→</button><button id="chart-in" aria-label="放大 K 线">＋</button><button id="chart-out" aria-label="缩小 K 线">－</button><button id="chart-reset">回到最新</button></div></div>
+<p id="kline-meta" class="chart-meta" aria-live="off"></p><canvas id="kline" tabindex="0" role="img" aria-label="K 线图"></canvas>
+<div class="chart-caption"><span>MA5 · MA10 · MA20 / 原始价格，未复权</span><span id="period-note"></span><button id="pull-history" type="button" class="quiet" hidden>补全历史日线</button></div>
+<details class="profile"><summary>公司资料与数据来源</summary><dl id="profile-dl"></dl></details>
+<details><summary>图表数据表（键盘与读屏）</summary><div class="table-wrap"><table aria-label="K 线数据"><thead><tr><th>日期</th><th>开</th><th>高</th><th>低</th><th>收</th></tr></thead><tbody id="bars-table"></tbody></table></div></details>
+<div id="history-range"></div></div><div id="intraday-panel" hidden><p id="intraday-meta" class="chart-meta"></p><canvas id="intraday-canvas" role="img" aria-label="成交价格、均价与成交量分时图"></canvas><p class="microcopy">蓝线：价格 · 金线：成交量加权均价 · 下方：分钟成交量；缺失分钟保留断点。</p><div id="intraday-note"></div></div><div id="research-panel" hidden></div>
+</div></section></div>
+<section id="view-pulse" class="page" hidden>
+<div class="map-actionbar"><div class="actions"><button id="map-toggle-filters" aria-expanded="false">市场与筛选</button><button id="map-toggle-details" aria-expanded="false">个股速览</button><button id="pulse-refresh" type="button" class="primary">刷新行情</button></div></div>
+<div id="market-indices" class="market-indices"></div>
+<div id="map-workspace" class="map-workspace">
+<aside id="map-controls" class="map-controls" aria-label="星图筛选" hidden><button id="map-filters-close" class="quiet">关闭筛选 ×</button><div class="section-label">市场范围</div><nav id="map-markets" class="map-markets" aria-label="星图市场"></nav><div class="map-control-section"><label class="field">面积代表<select id="map-metric"><option value="auto">自动 · 优先同日流通市值</option><option value="float_market_cap">流通市值</option><option value="market_cap">总市值</option><option value="turnover">成交额</option><option value="equal">等面积</option></select></label><p class="microcopy">颜色代表涨跌幅 · ±5% 饱和</p><label class="check"><input type="checkbox" id="map-watch-only">仅看当前市场自选</label><label class="check"><input type="checkbox" id="map-highlight-watch">高亮自选</label></div><div class="map-control-section"><label class="field">定位个股或行业<input id="map-search" type="search" placeholder="代码 / 名称 / 行业" autocomplete="off"></label><p id="map-search-count" class="microcopy">搜索将高亮匹配股票和行业</p><div id="map-search-results" class="map-search-results"></div></div><div class="map-control-section"><div class="section-label">数据覆盖</div><div id="map-quality-list" class="map-quality-list"></div><details class="map-methodology"><summary>统计口径与数据说明</summary><div id="map-notes"></div></details><a class="text-link" href="#/data">补充行情与市值数据 ↗</a></div></aside>
+<div class="map-main"><div class="map-toolbar"><div class="map-path"><button id="map-home" class="quiet" disabled>全部行业</button><span>/</span><strong id="map-breadcrumb">全部行业</strong></div><div class="map-tools"><button id="map-out" aria-label="缩小星图">−</button><span id="map-zoom">100%</span><button id="map-in" aria-label="放大星图">+</button><button id="map-reset">重置</button><button id="map-fullscreen">全屏</button></div></div>
+<div id="map-error" class="map-error" role="alert" hidden><span id="map-error-text"></span><button id="map-retry">重试</button></div>
+<div class="map-stage"><canvas id="market-canvas" tabindex="0" role="img" aria-label="行业股票热力星图。方向键选择股票，Enter 查看详情，加减号缩放，Esc 重置。"></canvas><div id="map-tooltip" class="map-tooltip" hidden></div><div id="map-empty" class="map-empty" hidden><span class="empty-symbol">▦</span><h2 id="map-empty-title">等待市场数据</h2><p id="map-empty-text"></p><a class="button primary" href="#/data">前往数据中心</a></div></div>
+<div class="map-statusbar"><div class="map-status-left" title="点选速览 · 双击详情 · 行业下钻 · 滚轮缩放 / 拖动平移"><div id="map-legend" class="map-legend" aria-label="涨跌幅色阶"></div><div id="map-breadth-bar" class="breadth-bar"></div><div id="map-breadth" class="map-breadth"></div></div><div class="map-status-right"><p id="map-sync-status" role="status" hidden></p><div class="map-status-meta"><span id="map-state" class="map-state">读取截面</span><span id="map-scope">等待数据</span><strong id="map-metric-label">面积 · 自动</strong><span id="map-date" hidden>—</span></div></div></div>
+</div>
+<aside id="map-inspector" class="map-inspector" aria-label="星图选中股票详情" hidden><button id="map-details-close" class="quiet">关闭速览 ×</button><div class="section-label">个股速览</div><div id="map-selection-empty" class="selection-empty"><span>◎</span><h3>选择一只股票</h3><p>查看价格、面积权重与数据来源。缩放可查看小市值股票。</p></div><div id="map-selection" hidden><h2 id="map-selected-name"></h2><p id="map-selected-code" class="microcopy"></p><div class="map-selected-price"><strong id="map-selected-last"></strong><b id="map-selected-pct"></b></div><dl id="map-selected-fields" class="map-selected-fields"></dl><button id="map-open-stock" class="primary">打开个股详情 ↗</button><button id="map-open-industry">聚焦所属行业</button></div><div class="inspector-foot"><b>报价与计算分开标时</b><p>刷新页面不会改变报价日期。历史日线不会显示为实时行情。</p><p id="map-updated"></p></div></aside></div><p id="map-selection-live" class="sr-only" aria-live="polite"></p>
+<details class="pulse-analysis"><summary>市场解读与行业统计 <span>基于 A 股已导入样本</span></summary>
+<div id="pulse-quality" class="quality-banner"></div><div id="pulse-empty" class="flash" hidden></div>
+<div id="pulse-body"><div class="pulse-headline-row"><h2 id="pulse-headline"></h2><span id="pulse-regime" class="badge"></span><span id="pulse-conf" class="badge"></span></div><p id="pulse-session" class="muted"></p><ul id="pulse-reasons" class="reasons"></ul><div id="pulse-indices" class="index-strip"></div><div id="pulse-tape" class="metrics"></div>
+<div class="sector-grid"><article class="card"><h2>领涨行业</h2><div id="pulse-sectors-up"></div></article><article class="card"><h2>领跌行业</h2><div id="pulse-sectors-down"></div></article></div>
+<article id="pulse-watch" class="card"></article><p id="pulse-extremes" class="muted"></p><div id="pulse-capital" class="muted"></div><p id="pulse-ts" class="muted"></p></div></details></section>
+<section id="view-data" class="page" hidden>
+<div class="page-title"><div><p class="eyebrow">DATA CENTER</p><h1>数据与任务</h1><p class="muted">预览校验结果后应用；导入和同步均在后台执行。</p></div><button id="data-refresh">刷新状态</button></div>
+<div id="data-stats" class="metrics"></div>
+<div class="two-columns"><article class="card"><h2>导入文件</h2><p class="muted">支持 JSON bundle，包含 listings、quotes、bars。文件仅写入本地库。</p><label class="field">选择本机文件<input id="import-upload" type="file" accept=".json,application/json"></label><form id="import-form"><label class="field">服务端数据目录内的路径<input id="import-path" placeholder="examples/demo.board.json"></label><div class="actions"><button type="button" id="demo-import">选择演示数据</button><button type="submit" class="primary">校验预览</button></div></form><div id="import-preview" hidden></div><p id="import-result" role="status"></p></article>
+<article class="card"><h2>同步数据源</h2><p id="data-provider" class="muted"></p><div class="actions"><button id="tushare-sync" class="primary">同步 A 股列表与行情</button><button id="tushare-valuations">同步流通市值</button><button id="tushare-indices">同步指数日线</button><a class="button" href="#/settings">配置与测试连接</a></div><p class="muted">行情、市值、指数分别同步，任务会报告各接口权限与异常。市值按来源单位换算为元，仅同日权重参与星图；指数为日线。港美股可导入文件。</p></article></div>
+<article class="card"><h2>任务记录</h2><p class="muted">取消在排队和下载阶段生效；原子写入阶段会完成当前事务。已提交批次保留。</p><div id="jobs-box"></div></article>
+<details class="card"><summary>导入批次记录</summary><div id="runs-box"></div></details></section>
+<section id="view-settings" class="page" hidden>
+<div class="page-title"><div><p class="eyebrow">PREFERENCES</p><h1>设置</h1><p class="muted">设置保存在本地，保存成功后生效。</p></div><span id="settings-result" role="status"></span></div>
+<div class="two-columns"><article class="card"><h2>Tushare 数据源</h2><p id="tushare-status" class="muted"></p><form id="provider-form"><label class="field">用户 ID<input id="provider-user" autocomplete="off"></label><label class="field">Token（留空保留已有值）<input id="provider-token" type="password" autocomplete="new-password"></label><label class="check"><input id="provider-enabled" type="checkbox">交易时段后台刷新 A 股</label><label class="field">刷新间隔（毫秒）<input id="provider-poll" type="number" min="1000" max="300000" step="1000"></label><label class="field">范围<select id="provider-universe"><option value="full">配置覆盖的 A 股</option><option value="watchlist">A 股自选</option></select></label><div class="actions"><button class="primary" type="submit">保存数据源</button><button id="provider-test" type="button">测试已保存连接</button><button id="provider-clear" type="button" class="quiet">清除本地 Token</button></div></form><p class="muted">环境变量凭据优先；连接测试只验证交易日历权限，其他权限由同步任务报告。</p></article>
+<article class="card"><h2>行情与外观</h2><label class="field">默认板块<select id="default-board"></select></label><div id="workspace-presets" class="actions"><span>工作区预设</span><button type="button" data-preset="market">行情浏览</button><button type="button" data-preset="watch">自选研究</button></div><form id="preferences-form"><label class="field">主题<select id="pref-theme"><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></label><label class="field">涨跌颜色<select id="pref-colors"><option value="red_up">红涨绿跌</option><option value="green_up">绿涨红跌</option></select></label><label class="field">列表宽度<input id="pref-width" type="range" min="300" max="720" step="10"></label><fieldset><legend>显示列</legend><div id="pref-columns" class="checks"></div></fieldset><button type="submit" class="primary">保存外观</button></form><details><summary>快捷键</summary><p>/ 或 Ctrl+K 搜索；↑↓ / J K 选股；1/2/3 切周期；W 自选；Esc 清除搜索；图表方向键平移、＋－缩放。</p></details></article></div>
+<article class="card"><h2>自选管理</h2><div class="watch-search-bar"><label class="field">搜索股票名称或代码<input id="watch-search" type="search" placeholder="如 贵州茅台 / 600519 / AAPL" autocomplete="off"></label><label class="field">搜索市场<select id="watch-search-market"><option value="ALL">全部市场</option><option value="CN.SH">沪市</option><option value="CN.SZ">深市</option><option value="CN.BJ">北证</option><option value="HK">港股</option><option value="US">美股</option></select></label></div><p id="watch-search-note" class="microcopy" role="status">从本地标的库搜索，选择后自动填写代码、市场和名称。</p><div id="watch-search-results" hidden></div><form id="watch-form" class="inline-form"><input id="watch-symbol" aria-label="股票代码" placeholder="股票代码" required><select id="watch-market" aria-label="市场"><option>CN.SH</option><option>CN.SZ</option><option>CN.BJ</option><option>HK</option><option>US</option></select><input id="watch-name" aria-label="名称（可选）" placeholder="名称（可选）"><button class="primary">添加自选</button></form><ul id="watch-edit" class="watch-list"></ul><details><summary>导入 / 导出自选</summary><textarea id="watch-import" aria-label="自选 JSON" rows="5" placeholder='[{"symbol":"600519","market":"CN.SH"}]'></textarea><div class="actions"><button id="watch-import-btn">合并导入</button><button id="watch-export">导出 JSON</button></div></details></article>
+<article class="card"><h2>近期查看</h2><div id="recent-views" class="actions"></div></article><article class="card"><h2>存储与诊断</h2><dl id="storage-info" class="profile-grid"></dl><p class="muted">通过 GETRICH_DATA_ROOT 或 GETRICH_DB 调整存储位置，重启生效。诊断文件不包含 Token。</p><button id="diagnostics-export">导出诊断</button></article></section>
+</main><footer>GetRich · 本地行情工作站 <span id="footer-status"></span></footer>
+<script type="module" src="/app.js"></script>
+</body></html>

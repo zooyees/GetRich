@@ -1,524 +1,194 @@
-const BOARDS = [
-  ["ALL", "全部"],
-  ["CN", "沪深京"],
-  ["CN.SH", "沪市"],
-  ["CN.SZ", "深市"],
-  ["CHINEXT", "创业板"],
-  ["STAR", "科创板"],
-  ["CN.BJ", "北证"],
-  ["HK", "港股"],
-  ["US", "美股"],
-  ["WATCH", "自选"],
-];
+import {$,esc,fmt,signed,pct,amount,direction,time,api,invoke,toast,busy,Reads,Events,applyPreferences} from "/runtime.js";
+import {Chart} from "/chart.js";
+import {Management,BOARDS,COLUMNS} from "/management.js";
+import {renderPulse} from "/pulse.js";
+import {MarketMap} from "/market-map.js";
+import {StockResearch} from "/stock-research.js";
 
-const READ_TIMEOUT_MS = 15000;
-const READ_RETRIES = 3;
-
-const state = {
-  view: "home",
-  board: "ALL",
-  query: "",
-  sort: "symbol",
-  rows: [],
-  cursor: 0,
-  loading: false,
-  stats: null,
-  detail: null,
-  bars: [],
-  tf: "1d",
-  empty_kind: null,
-  empty_message: "",
-  barEmpty: "",
-  chartLoading: false,
-  listError: null,
-  detailError: null,
-};
-
-const $ = (id) => document.getElementById(id);
-
-function fmt(n, d = 2) {
-  if (n === null || n === undefined || Number.isNaN(n)) return "—";
-  return Number(n).toLocaleString("zh-CN", { minimumFractionDigits: d, maximumFractionDigits: d });
+const state={view:"quotes",board:"ALL",query:"",sort:"symbol",industry:"",change_filter:"",offset:0,rows:[],matched:0,selectedKey:null,detail:null,bars:[],barMeta:{},tf:"1d",stats:null,preferences:{},snapshot:null,loading:false};
+const reads=new Reads();const chart=new Chart($("kline"),$("kline-meta"));
+let routeGeneration=0,detailGeneration=0,eventTimer=0,searchTimer=0;
+const key=row=>row?row.market+":"+row.symbol:null;
+const isCurrent=generation=>generation===routeGeneration&&state.view==="quotes";
+const guard=promise=>promise.catch(error=>{if(error.name!=="AbortError")toast(error.message,true);});
+const marketMap=new MarketMap({openStock:row=>{location.hash=stockHash(row);},isActive:()=>state.view==="pulse",onError:message=>toast(message,true)});
+const management=new Management({
+  isView:view=>state.view===view,
+  openRecent:(market,symbol)=>{location.hash=stockHash({market,symbol});},
+  settings:data=>{state.preferences=data.preferences||{};applyPreferences(state.preferences);applyColumns();chart.draw();marketMap.draw();},
+  stats:updateStats,
+  jobFinished:job=>{
+    if(!["succeeded","partial","failed"].includes(job.status))return;
+    toast(`任务 #${job.id} ${job.status==="succeeded"?"已完成":job.status==="partial"?"部分完成":"失败"}`,job.status==="failed");
+    if(state.view==="quotes")guard(loadBoard(routeGeneration,true));
+    if(state.view==="pulse"){guard(loadPulse(routeGeneration));guard(marketMap.refresh());}
+    guard(api("/v1/stats").then(updateStats));
+  },
+});
+const stockResearch=new StockResearch({current:()=>state.detail?.quote,configured:()=>!!management.settings?.provider?.configured,isActive:()=>state.view==="quotes",reload:()=>state.detail?loadStock(state.detail.quote,routeGeneration,true):Promise.resolve()});
+function quoteHash(changes={}){
+  const values={board:state.board,q:state.query,sort:state.sort,industry:state.industry,change_filter:state.change_filter,offset:state.offset,...changes};
+  const query=new URLSearchParams();for(const [name,value] of Object.entries(values))if(value!==""&&value!=null)query.set(name,String(value));
+  return "#/quotes?"+query;
 }
-
-function fmtVol(n) {
-  if (n === null || n === undefined) return "—";
-  const x = Number(n);
-  if (Math.abs(x) >= 1e8) return (x / 1e8).toFixed(2) + "亿";
-  if (Math.abs(x) >= 1e4) return (x / 1e4).toFixed(2) + "万";
-  return x.toLocaleString("zh-CN");
+function navigate(changes={}){location.hash=quoteHash({offset:0,...changes});}
+function stockHash(row){return `#/stock/${encodeURIComponent(row.market)}/${encodeURIComponent(row.symbol)}?${quoteHash().split("?")[1]}`;}
+function updateStats(stats){
+  state.stats=stats;
+  $("status-pill").textContent=stats.empty?"本地库为空":`${stats.listings} 只标的 · 库内最新 ${time(stats.last_quote_ts)}`;
 }
-
-function cls(dir) {
-  if (dir === "up") return "chg-up";
-  if (dir === "down") return "chg-down";
-  return "chg-flat";
+function applyColumns(){
+  const visible=new Set(state.preferences.columns||COLUMNS.map(c=>c[0]));visible.add("symbol");visible.add("name");
+  const order=state.preferences.columns||COLUMNS.map(c=>c[0]);
+  const header=$("quote-head").querySelector("tr")||$("quote-head");
+  const cells=[...$("quote-head").querySelectorAll("th")];for(const id of order){const cell=cells.find(c=>c.querySelector("button").dataset.sort===id);if(cell)header.appendChild(cell);}
+  for(const row of $("quote-body").rows){for(const id of order){const cell=[...row.cells].find(c=>c.dataset.col===id);if(cell)row.appendChild(cell);}}
+  $("quote-head").querySelectorAll("th").forEach(th=>{const col=th.querySelector("button").dataset.sort;th.hidden=!visible.has(col);});
+  $("quote-body").querySelectorAll("[data-col]").forEach(cell=>cell.hidden=!visible.has(cell.dataset.col));
 }
-
-function signed(n, d = 2) {
-  if (n === null || n === undefined) return "—";
-  const v = Number(n);
-  return (v > 0 ? "+" : "") + fmt(v, d);
+function renderBoards(){
+  $("boards").innerHTML=BOARDS.map(([id,label])=>`<button type="button" data-board="${id}" aria-pressed="${state.board===id}" class="${state.board===id?"on":""}">${label}</button>`).join("");
+  $("change-filter").value=state.change_filter;
+  $("industry-filter").textContent=state.industry?"行业："+state.industry:"";
 }
-
-async function fetchJson(url, options = {}, attempt = 1) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), READ_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { ...options, signal: ctrl.signal });
-    const body = await res.json();
-    if (!body.ok) {
-      const err = new Error(body.error && body.error.message ? body.error.message : "请求失败");
-      err.code = body.error && body.error.code;
-      err.status = res.status;
-      throw err;
-    }
-    return body.data;
-  } catch (e) {
-    const retryable =
-      e.name === "AbortError" || e.message === "Failed to fetch" || (e.status && e.status >= 500);
-    if (retryable && attempt < READ_RETRIES) {
-      await new Promise((r) => setTimeout(r, 400 * attempt));
-      return fetchJson(url, options, attempt + 1);
-    }
-    throw e;
-  } finally {
-    clearTimeout(timer);
-  }
+function showPage(view){
+  if(state.view==="pulse"&&view!=="pulse")marketMap.deactivate();
+  state.view=view;$("workspace").hidden=view!=="quotes";
+  for(const page of ["pulse","data","settings"])$("view-"+page).hidden=view!==page;
+  document.querySelectorAll(".nav a").forEach(a=>{const selected=a.dataset.route===(view==="quotes"?"quotes":view);a.classList.toggle("active",selected);if(selected)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
+  $("search-wrap").hidden=view!=="quotes";
 }
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
+async function route(){
+  const generation=++routeGeneration;reads.cancel();clearTimeout(eventTimer);detailGeneration++;
+  let path,params;try{const hash=location.hash||"#/quotes";const index=hash.indexOf("?");path=index<0?hash:hash.slice(0,index);params=new URLSearchParams(index<0?"":hash.slice(index+1));}catch{location.hash="#/quotes";return;}
+  clearTimeout(searchTimer);
+  if(path==="#/pulse"){showPage("pulse");await Promise.all([loadPulse(generation),marketMap.refresh()]);return;}
+  if(path==="#/data"){showPage("data");await management.loadData();return;}
+  if(path==="#/settings"){showPage("settings");await management.loadSettings();return;}
+  const stock=path.match(/^#\/stock\/([^/]+)\/([^/?]+)$/);
+  if(params.has("board"))state.board=params.get("board");
+  if(params.has("q"))state.query=params.get("q");
+  if(params.has("sort"))state.sort=params.get("sort");
+  state.industry=params.get("industry")||"";state.change_filter=params.get("change_filter")||"";state.offset=Math.max(0,Number(params.get("offset"))||0);
+  $("quote-search").value=state.query;showPage("quotes");renderBoards();
+  $("workspace").classList.toggle("detail-open",!!stock);
+  const wanted=stock?{market:decodeURIComponent(stock[1]),symbol:decodeURIComponent(stock[2])}:null;
+  await loadBoard(generation,false,wanted);
 }
-
-function setViews() {
-  $("view-home").hidden = state.view !== "home";
-  $("view-quotes").hidden = state.view !== "list";
-  $("view-detail").hidden = state.view !== "detail";
-  document.querySelectorAll(".nav a").forEach((a) => {
-    const route = a.dataset.route;
-    a.classList.toggle("active", (route === "home" && state.view === "home") || (route === "quotes" && state.view !== "home"));
-  });
-}
-
-function setStatus(text) {
-  $("status-pill").textContent = text;
-}
-
-function showFlash(id, html, isError) {
-  const el = $(id);
-  el.hidden = !html;
-  el.classList.toggle("error", !!isError);
-  el.innerHTML = html || "";
-}
-
-function renderBoards() {
-  const nav = $("boards");
-  nav.innerHTML = BOARDS.map(
-    ([id, label]) =>
-      `<button type="button" data-board="${id}" class="${state.board === id ? "on" : ""}">${label}</button>`
-  ).join("");
-  nav.querySelectorAll("button").forEach((b) => {
-    b.onclick = () => {
-      state.board = b.dataset.board;
-      state.cursor = 0;
-      renderBoards();
-      loadList();
-    };
-  });
-}
-
-function renderHome() {
-  setViews();
-  const s = state.stats;
-  if (!s) {
-    $("home-listings").textContent = "—";
-    $("home-quotes").textContent = "—";
-    $("home-bars").textContent = "—";
-    $("home-note").textContent = "";
-    return;
-  }
-  $("home-listings").textContent = s.listings.toLocaleString("zh-CN");
-  $("home-quotes").textContent = s.quotes.toLocaleString("zh-CN");
-  $("home-bars").textContent = s.bars.toLocaleString("zh-CN");
-  $("home-note").textContent = s.empty ? s.message || "空库可运行。导入后在此显示数量。" : "";
-}
-
-function renderList() {
-  setViews();
-  const wrap = $("quote-table-wrap");
-  if (state.loading) {
-    showFlash("quote-flash", "<h2>正在载入</h2><p>读取报价列表。</p>", false);
-    wrap.hidden = true;
-    return;
-  }
-  if (state.listError) {
-    showFlash(
-      "quote-flash",
-      `<h2>无法载入行情</h2><p>${escapeHtml(state.listError)}</p><button type="button" class="btn btn-ghost retry" id="quote-retry">重试</button>`,
-      true
-    );
-    $("quote-retry").onclick = () => loadList();
-    wrap.hidden = true;
-    return;
-  }
-  if (!state.rows.length) {
-    const title = state.empty_kind === "no_match" ? "无匹配结果" : "暂无行情数据";
-    showFlash(
-      "quote-flash",
-      `<h2>${title}</h2><p>${escapeHtml(state.empty_message || "导入 listings 与 quotes 后在此显示。")}</p>`,
-      false
-    );
-    wrap.hidden = true;
-    return;
-  }
-  showFlash("quote-flash", "", false);
-  wrap.hidden = false;
-  const body = $("quote-body");
-  body.innerHTML = state.rows
-    .map((r, i) => {
-      const d = cls(r.direction);
-      return `<tr data-i="${i}" class="${i === state.cursor ? "selected" : ""}">
-        <td>${escapeHtml(r.symbol)}</td>
-        <td>${escapeHtml(r.name || "—")}</td>
-        <td class="${d}">${fmt(r.last)}</td>
-        <td class="${d}">${r.change_pct == null ? "—" : signed(r.change_pct) + "%"}</td>
-        <td class="${d}">${signed(r.change)}</td>
-        <td>${fmt(r.open)}</td>
-        <td class="${d}">${fmt(r.high)}</td>
-        <td class="${d}">${fmt(r.low)}</td>
-        <td>${fmt(r.prev_close)}</td>
-        <td>${fmtVol(r.volume)}</td>
-        <td>${fmtVol(r.turnover)}</td>
-        <td>${r.amplitude == null ? "—" : fmt(r.amplitude) + "%"}</td>
-        <td>${escapeHtml(r.market_label || r.market)}</td>
-        <td>${escapeHtml(r.board_label || r.market_label)}</td>
-      </tr>`;
-    })
-    .join("");
-  body.querySelectorAll("tr").forEach((tr) => {
-    tr.onclick = () => {
-      state.cursor = Number(tr.dataset.i);
-      openDetail();
-    };
-  });
-}
-
-function gridItem(label, value, dir) {
-  return `<div><dt>${label}</dt><dd class="${dir || ""}">${value}</dd></div>`;
-}
-
-function renderDetail() {
-  setViews();
-  const d = state.detail;
-  if (state.detailError) {
-    showFlash(
-      "detail-flash",
-      `<h2>无法载入明细</h2><p>${escapeHtml(state.detailError)}</p><button type="button" class="btn btn-ghost retry" id="detail-retry">重试</button>`,
-      true
-    );
-    const retry = $("detail-retry");
-    if (retry) {
-      retry.onclick = () => {
-        const h = location.hash.match(/^#\/stock\/([^/]+)\/([^/]+)/);
-        if (h) loadDetail(decodeURIComponent(h[1]), decodeURIComponent(h[2]));
-      };
-    }
-    return;
-  }
-  if (!d) {
-    showFlash("detail-flash", "<h2>正在载入</h2><p>读取标的明细。</p>", false);
-    return;
-  }
-  showFlash("detail-flash", "", false);
-  const q = d.quote;
-  const dir = cls(q.direction);
-  $("detail-name").textContent = q.name || q.symbol;
-  $("detail-code").textContent = `${q.symbol}  ·  ${q.board_label || q.market_label}`;
-  const last = d.empty && d.empty.no_quote ? "暂无报价" : fmt(q.last);
-  $("quote-strip").innerHTML = [
-    gridItem("最新", last, d.empty && d.empty.no_quote ? "chg-flat" : dir),
-    gridItem("涨跌", signed(q.change), dir),
-    gridItem("涨幅", q.change_pct == null ? "—" : signed(q.change_pct) + "%", dir),
-    gridItem("今开", fmt(q.open), dir),
-    gridItem("最高", fmt(q.high), dir),
-    gridItem("最低", fmt(q.low), dir),
-    gridItem("昨收", fmt(q.prev_close)),
-    gridItem("成交量", fmtVol(q.volume)),
-    gridItem("成交额", fmtVol(q.turnover)),
-    gridItem("振幅", q.amplitude == null ? "—" : fmt(q.amplitude) + "%"),
-  ].join("");
-  drawChart();
-}
-
-function sma(values, n) {
-  const out = new Array(values.length).fill(null);
-  let sum = 0;
-  for (let i = 0; i < values.length; i++) {
-    sum += values[i];
-    if (i >= n) sum -= values[i - n];
-    if (i >= n - 1) out[i] = sum / n;
-  }
-  return out;
-}
-
-function drawChart() {
-  const canvas = $("kline");
-  const rows = state.bars || [];
-  const ctx = canvas.getContext("2d");
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth || 800;
-  const h = canvas.clientHeight || 420;
-  canvas.width = Math.floor(w * dpr);
-  canvas.height = Math.floor(h * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  if (state.chartLoading) {
-    $("kline-meta").textContent = "正在载入 K 线";
-    return;
-  }
-  if (!rows.length) {
-    $("kline-meta").textContent = "";
-    ctx.fillStyle = "#6e6e73";
-    ctx.font = "15px -apple-system, BlinkMacSystemFont, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(state.barEmpty || "暂无 K 线。导入 bars 后在此绘制。", w / 2, h / 2);
-    return;
-  }
-
-  const pad = { l: 56, r: 12, t: 16, b: 72 };
-  const volH = 64;
-  const plotH = h - pad.t - pad.b - volH;
-  const plotW = w - pad.l - pad.r;
-  const highs = rows.map((r) => r.high);
-  const lows = rows.map((r) => r.low);
-  const closes = rows.map((r) => r.close);
-  let min = Math.min(...lows);
-  let max = Math.max(...highs);
-  const ma5 = sma(closes, 5);
-  const ma10 = sma(closes, 10);
-  const ma20 = sma(closes, 20);
-  [ma5, ma10, ma20].forEach((arr) =>
-    arr.forEach((v) => {
-      if (v != null) {
-        min = Math.min(min, v);
-        max = Math.max(max, v);
-      }
-    })
-  );
-  if (min === max) {
-    min -= 1;
-    max += 1;
-  }
-  const vols = rows.map((r) => r.volume || 0);
-  const vmax = Math.max(1, ...vols);
-  const slot = plotW / rows.length;
-  const y = (p) => pad.t + ((max - p) / (max - min)) * plotH;
-  const x = (i) => pad.l + slot * i + slot / 2;
-
-  ctx.strokeStyle = "rgba(0,0,0,0.08)";
-  ctx.fillStyle = "#6e6e73";
-  ctx.font = "11px ui-monospace, SFMono-Regular, monospace";
-  ctx.textAlign = "right";
-  for (let i = 0; i <= 4; i++) {
-    const p = max - ((max - min) * i) / 4;
-    const yy = y(p);
-    ctx.fillText(p.toFixed(2), pad.l - 8, yy + 4);
-    ctx.beginPath();
-    ctx.moveTo(pad.l, yy);
-    ctx.lineTo(w - pad.r, yy);
-    ctx.stroke();
-  }
-
-  rows.forEach((r, i) => {
-    const up = r.close >= r.open;
-    ctx.strokeStyle = up ? "#e11d2f" : "#128a4b";
-    ctx.fillStyle = up ? "#e11d2f" : "#128a4b";
-    const cx = x(i);
-    const bw = Math.max(1, slot * 0.7);
-    ctx.beginPath();
-    ctx.moveTo(cx, y(r.high));
-    ctx.lineTo(cx, y(r.low));
-    ctx.stroke();
-    const top = y(Math.max(r.open, r.close));
-    const bot = y(Math.min(r.open, r.close));
-    ctx.fillRect(cx - bw / 2, top, bw, Math.max(1, bot - top));
-    const vh = (vols[i] / vmax) * (volH - 8);
-    const vy = h - 18 - vh;
-    ctx.globalAlpha = 0.55;
-    ctx.fillRect(cx - bw / 2, vy, bw, vh);
-    ctx.globalAlpha = 1;
-  });
-
-  function strokeMa(arr, color) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.25;
-    ctx.beginPath();
-    let started = false;
-    arr.forEach((v, i) => {
-      if (v == null) return;
-      if (!started) {
-        ctx.moveTo(x(i), y(v));
-        started = true;
-      } else ctx.lineTo(x(i), y(v));
-    });
-    ctx.stroke();
-    ctx.lineWidth = 1;
-  }
-  strokeMa(ma5, "#86868b");
-  strokeMa(ma10, "#0071e3");
-  strokeMa(ma20, "#bf4800");
-
-  const last = rows[rows.length - 1];
-  $("kline-meta").textContent = last
-    ? `${last.ts}  开 ${fmt(last.open)}  高 ${fmt(last.high)}  低 ${fmt(last.low)}  收 ${fmt(last.close)}`
-    : "";
-}
-
-async function loadHome() {
-  state.view = "home";
-  setViews();
-  try {
-    state.stats = await fetchJson("/v1/stats");
-    setStatus(state.stats.empty ? "空库" : "已连接");
-  } catch (e) {
-    setStatus("未连接");
-    state.stats = null;
-    $("home-note").textContent = "无法读取库状态：" + e.message;
-  }
-  renderHome();
-}
-
-async function loadList() {
-  state.view = "list";
-  state.loading = true;
-  state.listError = null;
-  renderList();
-  try {
-    const q = new URLSearchParams({
-      board: state.board,
-      q: state.query,
-      sort: state.sort,
-      limit: "400",
-    });
-    const data = await fetchJson("/v1/quotes?" + q.toString());
-    state.rows = data.rows || [];
-    state.stats = data.stats;
-    state.empty_kind = data.empty_kind;
-    state.empty_message = data.empty_message;
-    if (state.cursor >= state.rows.length) state.cursor = 0;
-    setStatus(state.stats && state.stats.empty ? "空库" : "已连接");
-  } catch (e) {
-    state.listError = e.message;
-    setStatus("未连接");
-  } finally {
-    state.loading = false;
-    renderList();
-  }
-}
-
-async function loadDetail(market, symbol) {
-  state.view = "detail";
-  state.chartLoading = true;
-  state.detailError = null;
-  state.detail = null;
-  renderDetail();
-  try {
-    const detail = await fetchJson(`/v1/stocks/${encodeURIComponent(market)}/${encodeURIComponent(symbol)}`);
-    state.detail = detail;
-    renderDetail();
-    const bars = await fetchJson(
-      `/v1/stocks/${encodeURIComponent(market)}/${encodeURIComponent(symbol)}/bars?timeframe=${state.tf}&limit=500`
-    );
-    state.bars = bars.rows || [];
-    state.barEmpty = bars.empty_message;
-    setStatus("已连接");
-  } catch (e) {
-    if (e.code === "NOT_FOUND") {
-      state.detailError = "未找到该股票。请确认已导入 listings。";
-    } else {
-      state.detailError = e.message;
-    }
-    setStatus("未连接");
-  } finally {
-    state.chartLoading = false;
-    if (state.view === "detail") renderDetail();
-  }
-}
-
-function openDetail() {
-  const row = state.rows[state.cursor];
-  if (!row) return;
-  location.hash = `#/stock/${encodeURIComponent(row.market)}/${encodeURIComponent(row.symbol)}`;
-}
-
-function route() {
-  const h = location.hash || "#/";
-  const stock = h.match(/^#\/stock\/([^/]+)\/([^/]+)/);
-  if (stock) {
-    loadDetail(decodeURIComponent(stock[1]), decodeURIComponent(stock[2]));
-    return;
-  }
-  if (h === "#/quotes" || h.startsWith("#/quotes?")) {
-    loadList();
-    return;
-  }
-  loadHome();
-}
-
-function bind() {
-  renderBoards();
-  $("quote-search").addEventListener("input", (e) => {
-    state.query = e.target.value.trim();
-    state.cursor = 0;
-    loadList();
-  });
-  document.querySelectorAll(".quote-table th[data-sort]").forEach((th) => {
-    th.style.cursor = "pointer";
-    th.onclick = () => {
-      state.sort = th.dataset.sort;
-      loadList();
-    };
-  });
-  $("tf-tabs").querySelectorAll("button").forEach((b) => {
-    b.onclick = () => {
-      state.tf = b.dataset.tf;
-      $("tf-tabs").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
-      if (state.detail) loadDetail(state.detail.quote.market, state.detail.quote.symbol);
-    };
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && document.activeElement !== $("quote-search")) {
-      e.preventDefault();
-      if (state.view !== "list") location.hash = "#/quotes";
-      $("quote-search").focus();
+async function loadBoard(generation,passive=false,wanted=null){
+  if(!isCurrent(generation))return;
+  state.loading=true;$("quote-body").setAttribute("aria-busy","true");
+  if(!passive)$("quote-flash").hidden=true;
+  const query=new URLSearchParams({board:state.board,q:state.query,sort:state.sort,industry:state.industry,change_filter:state.change_filter,offset:String(state.offset),limit:"200"});
+  try{
+    const page=await reads.get("board","/v1/quotes?"+query);
+    if(!isCurrent(generation))return;
+    state.rows=page.rows||[];state.matched=page.matched;updateStats(page.stats);renderList();
+    const explicit=location.hash.match(/^#\/stock\/([^/]+)\/([^/?]+)/);
+    let row=wanted||(explicit?{market:decodeURIComponent(explicit[1]),symbol:decodeURIComponent(explicit[2])}:null);
+    if(!row)row=state.rows.find(r=>key(r)===state.selectedKey)||state.rows[0];
+    if(!row){
+      state.selectedKey=null;state.detail=null;state.bars=[];$("detail-content").hidden=true;$("detail-flash").hidden=false;$("detail-flash").textContent="当前筛选无匹配股票";
+      $("quote-flash").hidden=false;$("quote-flash").innerHTML=`<h2>${page.empty_kind==="no_watch"?"暂无自选":"暂无匹配数据"}</h2><p>${esc(page.empty_message)}</p>${page.stats.empty?'<a class="button primary" href="#/data">导入数据</a>':""}`;
       return;
     }
-    if (state.view === "detail" && e.key === "Escape") {
-      location.hash = "#/quotes";
-      return;
-    }
-    if (state.view !== "list") return;
-    if (e.key === "ArrowDown" || e.key === "j") {
-      e.preventDefault();
-      state.cursor = Math.min(state.rows.length - 1, state.cursor + 1);
-      renderList();
-    } else if (e.key === "ArrowUp" || e.key === "k") {
-      e.preventDefault();
-      state.cursor = Math.max(0, state.cursor - 1);
-      renderList();
-    } else if (e.key === "Enter") {
-      openDetail();
-    }
-  });
-  window.addEventListener("resize", () => {
-    if (state.view === "detail") drawChart();
-  });
+    state.selectedKey=key(row);renderSelection();
+    await loadStock(row,generation,passive);
+  }catch(error){if(error.name==="AbortError")return;$("quote-flash").hidden=false;$("quote-flash").textContent="行情读取失败："+error.message;throw error;}
+  finally{if(isCurrent(generation)){state.loading=false;$("quote-body").removeAttribute("aria-busy");}}
 }
-
+function renderList(){
+  $("quote-body").innerHTML=state.rows.map(row=>`<tr data-key="${esc(key(row))}" tabindex="0" aria-selected="${key(row)===state.selectedKey}" class="${key(row)===state.selectedKey?"selected":""}"><td data-col="symbol" class="symbol">${esc(row.symbol)}<small>${esc(row.market)}</small></td><td data-col="name" class="name">${esc(row.name||row.symbol)}</td><td data-col="last" class="num">${fmt(row.last)}</td><td data-col="change_pct" class="num ${direction(row.change_pct)}">${pct(row.change_pct)}</td><td data-col="change_amt" class="num ${direction(row.change)}">${signed(row.change)}</td><td data-col="turnover" class="num">${amount(row.turnover,row.currency)}</td><td data-col="amplitude" class="num">${row.amplitude==null?"—":fmt(row.amplitude)+"%"}</td></tr>`).join("");
+  $("quote-foot").textContent=state.matched?`${state.offset+1}–${state.offset+state.rows.length} / 筛选 ${state.matched} 只`:"0 只";
+  $("page-prev").disabled=state.offset===0;$("page-next").disabled=state.offset+state.rows.length>=state.matched;
+  $("quote-head").querySelectorAll("button").forEach(button=>{const base=state.sort.replace(/_(asc|desc)$/,"");const selected=base===button.dataset.sort;button.classList.toggle("on",selected);button.parentElement.setAttribute("aria-sort",selected?(state.sort.endsWith("_asc")||["symbol","name"].includes(state.sort)?"ascending":"descending"):"none");});
+  applyColumns();
+}
+function renderSelection(){for(const row of $("quote-body").rows){const selected=row.dataset.key===state.selectedKey;row.classList.toggle("selected",selected);row.setAttribute("aria-selected",String(selected));}}
+async function loadStock(row,generation,passive=false){
+  const request=++detailGeneration;const selected=key(row);state.selectedKey=selected;
+  if(!passive){$("detail-content").hidden=true;$("detail-flash").hidden=false;$("detail-flash").textContent="正在载入详情…";}
+  try{
+    const prefix=`/v1/stocks/${encodeURIComponent(row.market)}/${encodeURIComponent(row.symbol)}`;
+    const [detail,bars]=await Promise.all([reads.get("detail",prefix),reads.get("bars",prefix+`/bars?timeframe=${state.tf}&limit=20000`)]);
+    if(!isCurrent(generation)||request!==detailGeneration||state.selectedKey!==selected)return;
+    const changed=key(state.detail?.quote)!==key(detail.quote);
+    state.detail=detail;state.barMeta=bars;state.bars=bars.rows||[];renderDetail(!passive,bars.empty_message);
+    guard(stockResearch.update());
+    if(changed&&!passive)guard(invoke("history.view",{symbol:row.symbol,market:row.market}));
+  }catch(error){if(error.name==="AbortError")return;if(request!==detailGeneration)return;$("detail-flash").hidden=false;$("detail-flash").textContent="详情读取失败："+error.message;throw error;}
+}
+function gridItem(name,value){return `<div><dt>${esc(name)}</dt><dd>${esc(value)}</dd></div>`;}
+function renderDetail(reset=false,message=""){
+  const detail=state.detail;if(!detail)return;const q=detail.quote;
+  $("detail-flash").hidden=true;$("detail-content").hidden=false;$("detail-name").textContent=q.name||q.symbol;
+  const outside=!state.rows.some(row=>key(row)===key(q));
+  $("detail-code").textContent=`${q.symbol} · ${q.board_label||q.market} · ${q.currency||""}${outside?" · 当前列表范围外":""}`;
+  $("detail-time").textContent=`行情时间 ${q.source_kind==="daily"?(q.trade_date||q.ts?.slice(0,10)||"—")+" · 日线日期精度":time(q.ts,q.market)}${q.data_status?" · "+q.data_status:""}`;
+  $("detail-last").className=direction(q.change_pct);$("detail-last").textContent=detail.empty.no_quote?"暂无报价":fmt(q.last);$("detail-chg").className=direction(q.change_pct);$("detail-chg").textContent=detail.empty.no_quote?"":`${signed(q.change)} / ${pct(q.change_pct)}`;
+  $("watch-btn").textContent=detail.watched?"★ 已自选":"☆ 加入自选";$("watch-btn").setAttribute("aria-pressed",String(detail.watched));$("watch-btn").setAttribute("aria-label",detail.watched?"移除自选":"加入自选");
+  $("quote-strip").innerHTML=[["今开",fmt(q.open)],["最高",fmt(q.high)],["最低",fmt(q.low)],["昨收",fmt(q.prev_close)],["成交量（股）",amount(q.volume)],["成交额",amount(q.turnover,q.currency)],["振幅",q.amplitude==null?"—":fmt(q.amplitude)+"%"],["行业",detail.listing?.industry||"未分类"]].map(([label,value])=>gridItem(label,value)).join("");
+  const listing=detail.listing||{};$("profile-dl").innerHTML=[["行业",listing.industry||listing.sector||"—"],["交易所",listing.exchange||"—"],["上市日",listing.listing_date||"—"],["状态",listing.status||"—"],["接收时间",time(q.received_at,q.market)],["报价类型",q.source_kind||"—"],...(detail.metadata||[]).map(m=>[m.key,m.value])].map(([a,b])=>gridItem(a,b)).join("");
+  $("tf-tabs").querySelectorAll("button").forEach(button=>{const selected=stockResearch.intraday?button.dataset.tf==="intraday":button.dataset.tf===state.tf;button.setAttribute("aria-selected",String(selected));button.classList.toggle("active",selected);});
+  $("period-note").textContent=state.barMeta.partial_last_period?"最新周/月周期仍在进行，以已导入日线为准":"";
+  chart.setData(state.bars,{reset,message:message||"暂无该周期 K 线"});
+  $("bars-table").innerHTML=state.bars.slice(-200).map(b=>`<tr><td>${esc(b.ts)}</td><td>${fmt(b.open)}</td><td>${fmt(b.high)}</td><td>${fmt(b.low)}</td><td>${fmt(b.close)}</td></tr>`).join("");
+  $("pull-history").hidden=!String(q.market).startsWith("CN.")||!management.settings?.provider?.configured;
+  $("detail-back").href=quoteHash();
+  stockResearch.render();
+}
+async function loadPulse(generation){
+  if(state.view!=="pulse"||generation!==routeGeneration)return;
+  try{
+    const snapshot=await reads.get("pulse","/v2/pulse");
+    if(state.view!=="pulse"||generation!==routeGeneration)return;
+    state.snapshot=snapshot;renderPulse(snapshot,navigate);marketMap.setPulse(snapshot);
+  }catch(error){if(error.name==="AbortError")return;$("pulse-quality").className="quality-banner bad";$("pulse-quality").textContent=`市场截面读取失败：${error.message}${state.snapshot?" · 下方保留上次成功快照，未代表当前状态":""}`;if(!state.snapshot)$("pulse-body").hidden=true;}
+}
+function scheduleRefresh(){
+  clearTimeout(eventTimer);const generation=routeGeneration;
+  eventTimer=setTimeout(()=>{if(generation!==routeGeneration)return;if(state.view==="quotes")guard(loadBoard(generation,true));if(state.view==="pulse"){guard(loadPulse(generation));guard(marketMap.refresh());}if(state.view==="data")guard(management.loadData());},400);
+}
+const events=new Events(async event=>{
+  if(["job.updated"].includes(event.type)){await management.loadJobs();return;}
+  if(event.type==="settings.changed"){
+    const data=await api("/v1/settings");management.settings=data;state.preferences=data.preferences||{};applyPreferences(state.preferences);applyColumns();chart.draw();marketMap.draw();if(state.view==="settings")management.renderWatch(data.watchlist||[]);scheduleRefresh();return;
+  }
+  if(["quote.updated","ingest.done","snapshot.available","resync_required"].includes(event.type))scheduleRefresh();
+});
+function bind(){
+  $("boards").onclick=event=>{const button=event.target.closest("[data-board]");if(button)navigate({board:button.dataset.board,industry:""});};
+  $("quote-search").oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{if(state.view==="quotes")navigate({q:$("quote-search").value.trim()});},200);};
+  $("change-filter").onchange=()=>navigate({change_filter:$("change-filter").value});
+  $("clear-filters").onclick=()=>navigate({q:"",industry:"",change_filter:"",board:"ALL"});
+  $("quote-head").onclick=event=>{const button=event.target.closest("[data-sort]");if(!button)return;let next=button.dataset.sort;const base=state.sort.replace(/_(asc|desc)$/,"");if(base===next)next=state.sort.endsWith("_asc")?next:["symbol","name"].includes(state.sort)?next+"_desc":next+"_asc";navigate({sort:next});};
+  $("quote-body").onclick=event=>{const tr=event.target.closest("[data-key]");const row=state.rows.find(row=>key(row)===tr?.dataset.key);if(row)location.hash=stockHash(row);};
+  $("quote-body").onkeydown=event=>{if(event.key==="Enter"){const tr=event.target.closest("[data-key]");const row=state.rows.find(row=>key(row)===tr?.dataset.key);if(row)location.hash=stockHash(row);}};
+  $("page-prev").onclick=()=>navigate({offset:Math.max(0,state.offset-200)});$("page-next").onclick=()=>navigate({offset:state.offset+200});
+  $("tf-tabs").onclick=event=>{const tf=event.target.closest("[data-tf]")?.dataset.tf;if(!tf||!state.detail)return;stockResearch.setIntraday(tf==="intraday");if(tf==="intraday"){renderDetail();return;}state.tf=tf;guard(loadStock(state.detail.quote,routeGeneration));};
+  $("watch-btn").onclick=()=>guard(busy($("watch-btn"),async()=>{const d=state.detail;if(!d)return;const result=await invoke("watch.set",{symbol:d.quote.symbol,market:d.quote.market,name:d.quote.name,watched:!d.watched});if(state.detail&&key(state.detail.quote)===key(d.quote)){state.detail.watched=result.watched;renderDetail();}if(state.board==="WATCH")await loadBoard(routeGeneration,true);toast(result.watched?"已加入自选":"已移除自选");}));
+  $("pulse-refresh").onclick=()=>guard(marketMap.sync());
+  $("pull-history").onclick=()=>guard(stockResearch.ensure("history",true));
+  $("chart-in").onclick=()=>chart.zoom(.8);$("chart-out").onclick=()=>chart.zoom(1.25);$("chart-left").onclick=()=>chart.move(-Math.max(1,Math.round(chart.span/2)));$("chart-right").onclick=()=>chart.move(Math.max(1,Math.round(chart.span/2)));$("chart-reset").onclick=()=>chart.reset();
+  document.addEventListener("keydown",event=>{
+    const typing=event.target.closest("input,textarea,select,[contenteditable=true]");
+    if(!typing&&(event.key==="/"||(event.ctrlKey&&event.key==="k"))){event.preventDefault();if(state.view!=="quotes")location.hash=quoteHash();setTimeout(()=>$("quote-search").focus(),100);return;}
+    if(event.key==="Escape"){if(typing){event.target.blur();return;}if(state.view==="quotes")navigate({q:""});return;}
+    if(typing||state.view!=="quotes")return;
+    if(["ArrowDown","j","ArrowUp","k"].includes(event.key)&&event.target!==$("kline")){
+      event.preventDefault();const current=Math.max(0,state.rows.findIndex(r=>key(r)===state.selectedKey));const next=Math.max(0,Math.min(state.rows.length-1,current+(["ArrowDown","j"].includes(event.key)?1:-1)));if(state.rows[next])location.hash=stockHash(state.rows[next]);
+    }
+    if(["1","2","3"].includes(event.key)&&state.detail){state.tf={"1":"1d","2":"1w","3":"1mo"}[event.key];guard(loadStock(state.detail.quote,routeGeneration));}
+    if(event.key.toLowerCase()==="w"&&state.detail)$("watch-btn").click();
+  });
+  window.addEventListener("hashchange",()=>guard(route()));
+  window.addEventListener("beforeunload",()=>events.stop());
+}
+async function health(){
+  try{const h=await api("/v1/health");$("connection").textContent="本地服务已连接";$("connection").className="status-dot connected";$("footer-status").textContent=`v${h.version} · 实例 ${h.instance_id||"—"}`;}catch(error){$("connection").textContent="连接异常";$("connection").className="status-dot offline";}
+}
 bind();
-window.addEventListener("hashchange", route);
-route();
+try{const settings=await management.initialize();state.board=settings.default_board||"ALL";}catch(error){toast("设置初始化失败："+error.message,true);}
+await guard(route());events.start();guard(health());
+setInterval(()=>{if(document.hidden)return;if(state.view==="pulse"){guard(loadPulse(routeGeneration));guard(marketMap.refresh());}if(state.view==="data")guard(management.loadJobs());},5000);
+setInterval(()=>{if(!document.hidden)guard(health());},15000);

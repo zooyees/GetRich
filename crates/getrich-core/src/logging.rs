@@ -9,9 +9,8 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 pub fn init(level: &str, log_file: Option<&Path>) -> Result<(), io::Error> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(normalize_level(level))
-    });
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(normalize_level(level)));
 
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)

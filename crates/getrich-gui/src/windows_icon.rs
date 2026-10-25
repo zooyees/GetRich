@@ -78,6 +78,7 @@ mod imp {
         SendMessageW(window, WM_SETICON, ICON_SMALL, state.small as Lparam);
         SetClassLongPtrW(window, GCLP_HICON, state.big as isize);
         SetClassLongPtrW(window, GCLP_HICONSM, state.small as isize);
+        crate::windows_dpi::install_on_window(window);
         state.applied = true;
         1
     }

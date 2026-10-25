@@ -66,18 +66,13 @@ pub fn upsert_listing(conn: &Connection, snap: &ListingSnapshot) -> Result<i64, 
             VALUES (?1,?2,?3,?4,?5,?6)
             ON CONFLICT(instrument_id, key) DO UPDATE SET
                 value = excluded.value,
-                source = COALESCE(excluded.source, instrument_metadata.source),
-                as_of = COALESCE(excluded.as_of, instrument_metadata.as_of),
+                source = excluded.source,
+                as_of = excluded.as_of,
                 updated_at = excluded.updated_at
+            WHERE excluded.as_of IS NULL OR instrument_metadata.as_of IS NULL
+               OR excluded.as_of >= instrument_metadata.as_of
             "#,
-            params![
-                id,
-                entry.key,
-                entry.value,
-                entry.source,
-                entry.as_of,
-                now,
-            ],
+            params![id, entry.key, entry.value, entry.source, entry.as_of, now,],
         )?;
     }
     Ok(id)
@@ -137,7 +132,10 @@ pub fn list_listings(conn: &Connection, q: &ListingQuery) -> Result<Vec<Instrume
         LIMIT ?4 OFFSET ?5
         "#,
     )?;
-    let rows = stmt.query_map(params![market, status, query, limit, offset], map_instrument)?;
+    let rows = stmt.query_map(
+        params![market, status, query, limit, offset],
+        map_instrument,
+    )?;
     let mut out = Vec::new();
     for row in rows {
         out.push(row?);
@@ -201,4 +199,42 @@ fn map_instrument(r: &rusqlite::Row<'_>) -> rusqlite::Result<Instrument> {
         created_at: r.get(18)?,
         updated_at: r.get(19)?,
     })
+}
+
+pub const WATERMARK_SYMBOL: &str = "_MARKET";
+pub const WATERMARK_MARKET: &str = "CN.SH";
+
+/// Sentinel listing for market-wide `data_freshness` (FK requires a real listings row).
+pub fn ensure_watermark_listing(conn: &Connection) -> Result<i64, DbError> {
+    let mut snap = ListingSnapshot::equity(
+        InstrumentKey::new(WATERMARK_SYMBOL, Market::CnSh),
+        "getrich",
+        WATERMARK_SYMBOL,
+    );
+    snap.name = Some("全市场水位".into());
+    snap.status = "internal".into();
+    snap.instrument_type = "index".into();
+    snap.lot_size = None;
+    upsert_listing(conn, &snap)
+}
+
+pub fn list_listing_ids(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<(String, String), i64>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, symbol, market FROM listings WHERE status IS NULL OR status != 'internal'",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, i64>(0)?,
+        ))
+    })?;
+    let mut out = std::collections::HashMap::new();
+    for row in rows {
+        let (symbol, market, id) = row?;
+        out.insert((symbol, market), id);
+    }
+    Ok(out)
 }

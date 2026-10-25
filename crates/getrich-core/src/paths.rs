@@ -89,7 +89,11 @@ mod tests {
 
     #[test]
     fn project_path_keeps_absolute() {
-        let abs = PathBuf::from("/tmp/getrich.db");
+        let abs = if cfg!(windows) {
+            PathBuf::from(r"C:\tmp\getrich.db")
+        } else {
+            PathBuf::from("/tmp/getrich.db")
+        };
         assert_eq!(project_path(&abs), abs);
     }
 

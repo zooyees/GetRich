@@ -22,6 +22,22 @@
     "default_timeframe": "1d",
     "read_retries": 3,
     "read_retry_backoff_ms": 500,
-    "read_timeout_ms": 15000
+    "read_timeout_ms": 15000,
+    "tushare": {
+      "user_id": "",
+      "token": "",
+      "enabled": false,
+      "poll_ms": 5000,
+      "universe": "full",
+      "rt_k_codes": "6*.SH,0*.SZ,3*.SZ,1*.SH,8*.BJ,4*.BJ,9*.BJ",
+      "live_timeout_ms": 8000,
+      "rate_per_min": 50
+    },
+    "pulse": {
+      "min_quoted": 3000,
+      "sector_top_n": 8,
+      "leader_n": 3,
+      "watch_min": 3
+    }
   }
 }

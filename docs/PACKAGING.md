@@ -1,16 +1,24 @@
 # Windows packaging (WiParse-style)
 
-Industrial pack for a Windows host with Rust + MSVC (or GNU) toolchain. This Linux VM cannot emit a PE `.exe`; run the script on Windows.
+Build the Windows archive on a Windows host with Rust + MSVC (or GNU) toolchain.
 
 ## Layout after pack
 
 ```
 dist/
-  GetRich.exe          # GUI workstation (windows_subsystem = windows)
-  GetRich-CLI.exe      # JSON CLI
-  config.default.json
-  GetRich.ico
+  GetRich-Windows-0.2.3-YYYYMMDD/
+    GetRich.exe          # GUI workstation (windows_subsystem = windows)
+    GetRich-CLI.exe      # JSON CLI and localhost workstation
+    config.default.json
+    GetRich.ico
+    examples/demo.board.json
+    RELEASE_NOTES.md
+    UI_MARKET_ATLAS_2026-10-25.md
+    UI_CORRECTIONS_0.2.1.md
+  GetRich-Windows-0.2.3-YYYYMMDD.zip
 ```
+
+Do **not** copy a filled-in `config.json` into `dist/` (it may contain a Tushare token). Use `GETRICH_TUSHARE_TOKEN` or copy `config.default.json` locally. If an older pack already shipped a token, rotate it.
 
 ## Icon
 
@@ -30,17 +38,14 @@ If you have the official asset at `D:\windlink\windlink\GetRich\icon\GetRich.ico
 From the repo root (PowerShell):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File packaging\pack-windows.ps1
+.\packaging\pack-windows.ps1
 ```
 
-Requires: Rust stable, `cargo` on PATH. The script builds `--release` for `getrich-gui` and `getrich-cli`, then copies artifacts into `dist\`.
+Requires: Rust stable, `cargo` on PATH. The script uses the lockfile, creates a clean dated staging directory, includes an importable demo, writes a ZIP, and prints its SHA-256 hash. It never copies `config.json`, databases, or logs.
 
-Optional API sidecar:
+`GetRich-CLI.exe serve` contains the browser workstation, so a separate API executable is unnecessary.
 
-```powershell
-cargo build --release -p getrich-api
-Copy-Item target\release\getrich-api.exe dist\GetRich-API.exe
-```
+For 0.2.3, `RELEASE_NOTES.md` is copied from `docs/RELEASE_0.2.3.md`. This version retains schema 6 for stock research caches. Close the old application, back up its configuration and database, then copy them to the new version directory before launching. Use the original backup to roll back; older applications cannot read a schema 6 database.
 
 ## Linux / this VM (closest runnable artifact)
 

@@ -23,3 +23,5 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 tiny_http = { workspace = true }
+crossbeam-channel = { workspace = true }
+url = { workspace = true }

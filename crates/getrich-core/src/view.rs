@@ -5,11 +5,17 @@
 
 use crate::db::QuoteBoardRow;
 use crate::models::{Bar, Instrument, MetadataEntry};
+use crate::session;
 use crate::symbol::{board_id, board_label_zh};
+use chrono::Timelike;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QuoteRow {
+    pub trade_date: Option<String>,
+    pub received_at: Option<String>,
+    pub source_kind: String,
+    pub data_status: String,
     pub instrument_id: i64,
     pub symbol: String,
     pub market: String,
@@ -34,6 +40,8 @@ pub struct QuoteRow {
     pub has_quote: bool,
     /// `up` | `down` | `flat` | `none`
     pub direction: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +59,7 @@ pub struct StockDetail {
     pub metadata: Vec<MetadataEntry>,
     pub bars: BarStats,
     pub empty: DetailEmpty,
+    pub watched: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,11 +70,18 @@ pub struct DetailEmpty {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StoreStats {
+    pub daily_bars: i64,
+    pub weekly_bars: i64,
+    pub monthly_bars: i64,
     pub listings: i64,
     pub quotes: i64,
     pub bars: i64,
     pub empty: bool,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_quote_ts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,7 +90,11 @@ pub struct QuoteBoardPage {
     pub board: String,
     pub query: String,
     pub sort: String,
+    #[serde(default)]
+    pub industry: String,
     pub count: usize,
+    pub matched: usize,
+    pub truncated: bool,
     pub rows: Vec<QuoteRow>,
     pub empty: bool,
     pub empty_kind: String,
@@ -83,6 +103,9 @@ pub struct QuoteBoardPage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BarPage {
+    pub basis_timeframe: String,
+    pub partial_last_period: bool,
+    pub data_version: u64,
     pub symbol: String,
     pub market: String,
     pub timeframe: String,
@@ -98,6 +121,10 @@ pub fn quote_row_from_board(row: QuoteBoardRow) -> QuoteRow {
     let inst = row.instrument;
     let board = board_id(&inst.key).to_string();
     let mut view = QuoteRow {
+        trade_date: None,
+        received_at: None,
+        source_kind: "missing".into(),
+        data_status: "无报价".into(),
         instrument_id: inst.id,
         symbol: inst.key.symbol.clone(),
         market: inst.key.market.as_str().to_string(),
@@ -121,10 +148,49 @@ pub fn quote_row_from_board(row: QuoteBoardRow) -> QuoteRow {
         ts: None,
         has_quote: false,
         direction: "none".into(),
+        source: None,
     };
     if let Some(q) = row.quote {
+        view.received_at = Some(q.ingested_at.clone());
+        view.source_kind = if q.source.contains("rt_k") {
+            "live"
+        } else if q.source.contains("daily") || q.ts.contains("T00:00:00") {
+            "daily"
+        } else {
+            "snapshot"
+        }
+        .into();
+        let source_time = session::parse_cn_ts(&q.ts).ok();
+        view.trade_date = if view.source_kind == "daily" {
+            q.ts.get(..10).map(str::to_string)
+        } else {
+            source_time
+                .map(|t| session::market_date_at(&view.market, t))
+                .map(session::iso_date)
+        };
+        view.data_status = if view.trade_date.as_deref()
+            != Some(
+                session::iso_date(session::market_date_at(&view.market, chrono::Utc::now()))
+                    .as_str(),
+            ) {
+            "历史报价"
+        } else if source_time.is_some_and(|t| (chrono::Utc::now() - t).num_seconds() > 60)
+            && view.market.starts_with("CN.")
+            && session::in_poll_window()
+            && view.source_kind != "daily"
+        {
+            "报价延迟"
+        } else {
+            "已保存报价"
+        }
+        .into();
         view.has_quote = true;
         view.last = Some(q.last);
+        view.source = if q.source.is_empty() {
+            None
+        } else {
+            Some(q.source.clone())
+        };
         view.open = q.open;
         view.high = q.high;
         view.low = q.low;
@@ -161,33 +227,117 @@ pub fn quote_row_from_board(row: QuoteBoardRow) -> QuoteRow {
     view
 }
 
+/// Align `last` with the session 1d bar when that bar is the live print, without
+/// letting a date-only / daily bar clobber an `rt_k` quote.
+pub fn prefer_session_last(row: &mut QuoteRow, bar: Option<&Bar>) {
+    let Some(bar) = bar else { return };
+    if !bar.close.is_finite() {
+        return;
+    }
+    let Some(bar_day) = session::calendar_date_of(&bar.ts) else {
+        return;
+    };
+    let quote_live = row.source.as_deref().is_some_and(|s| s.contains("rt_k"));
+    let bar_live = bar.source.contains("rt_k");
+    let bar_daily = bar.source.contains("daily");
+    if quote_live && bar_daily {
+        return;
+    }
+    let quote_dt = row.ts.as_deref().and_then(|t| session::parse_cn_ts(t).ok());
+    let quote_day = quote_dt
+        .map(session::shanghai_date_at)
+        .or_else(|| row.ts.as_deref().and_then(session::calendar_date_of));
+    // Unparsable ts must not be treated as EOD — that used to overwrite live last.
+    let quote_is_eod = quote_dt
+        .map(|dt| dt.time().num_seconds_from_midnight() == 0 && dt.nanosecond() == 0)
+        .unwrap_or(false);
+    if let Some(qd) = quote_day {
+        if bar_day < qd {
+            return;
+        }
+        if bar_day == qd {
+            if bar_daily && !quote_is_eod {
+                return;
+            }
+            if !bar_live && !quote_is_eod && row.last.is_some() {
+                return;
+            }
+        }
+        if bar_day > qd && row.last.is_some() {
+            row.prev_close = row.last;
+        }
+    } else if row.last.is_some() && !bar_live {
+        return;
+    }
+    row.last = Some(bar.close);
+    row.open = Some(bar.open);
+    row.high = Some(bar.high);
+    row.low = Some(bar.low);
+    row.volume = bar.volume.or(row.volume);
+    row.turnover = bar.turnover.or(row.turnover);
+    row.has_quote = true;
+    if quote_is_eod || quote_day.map(|qd| bar_day > qd).unwrap_or(true) {
+        row.ts = Some(bar.ts.clone());
+    }
+    row.change = row.prev_close.map(|p| bar.close - p);
+    row.change_pct = row
+        .prev_close
+        .filter(|p| *p != 0.0)
+        .map(|p| (bar.close - p) / p * 100.0);
+    row.amplitude = match (row.high, row.low, row.prev_close) {
+        (Some(h), Some(l), Some(p)) if p != 0.0 => Some((h - l) / p * 100.0),
+        _ => None,
+    };
+    row.direction = match row.change {
+        Some(c) if c > 0.0 => "up".into(),
+        Some(c) if c < 0.0 => "down".into(),
+        Some(_) => "flat".into(),
+        None => "none".into(),
+    };
+}
+
 pub fn empty_store_stats() -> StoreStats {
     StoreStats {
+        daily_bars: 0,
+        weekly_bars: 0,
+        monthly_bars: 0,
         listings: 0,
         quotes: 0,
         bars: 0,
         empty: true,
-        message: "数据库为空。导入 listings 后即可在行情列表中查看；导入 quotes / bars 后显示报价与 K 线。"
+        message: "库是空的。导入 listings 后即可看盘；导入 quotes / bars 后显示报价与 K 线。"
             .into(),
+        last_quote_ts: None,
+        last_success_at: None,
     }
 }
 
-pub fn store_stats_from_counts(listings: i64, quotes: i64, bars: i64) -> StoreStats {
+pub fn store_stats_from_counts(
+    listings: i64,
+    quotes: i64,
+    bars: i64,
+    last_quote_ts: Option<String>,
+    last_success_at: Option<String>,
+) -> StoreStats {
     let empty = listings == 0;
     let message = if empty {
-        "数据库为空。请按导入约定写入 listings / quotes / bars 后再查看。"
-            .into()
+        "库是空的。导入 listings / quotes / bars 后再查看。".into()
     } else if quotes == 0 {
-        format!("已有 {listings} 只股票，但尚无报价。导入 quotes 后行情列表将显示最新价与涨跌。")
+        format!("已有 {listings} 只股票，但尚无报价。导入 quotes 后行情表将显示最新价与涨跌。")
     } else {
         format!("listings={listings} quotes={quotes} bars={bars}")
     };
     StoreStats {
+        daily_bars: bars,
+        weekly_bars: 0,
+        monthly_bars: 0,
         listings,
         quotes,
         bars,
         empty,
         message,
+        last_quote_ts,
+        last_success_at,
     }
 }
 
@@ -195,7 +345,7 @@ pub fn board_empty_message(stats: &StoreStats, filtered_empty: bool) -> (String,
     if stats.empty {
         (
             "no_data".into(),
-            "暂无股票数据。后续导入 listings 后将出现在此列表。".into(),
+            "库是空的。到「数据」页导入 bundle 后即可看盘。".into(),
         )
     } else if filtered_empty {
         (
@@ -215,7 +365,8 @@ mod tests {
 
     #[test]
     fn computes_change_and_amplitude() {
-        let listing = ListingSnapshot::equity(InstrumentKey::new("AAPL", Market::Us), "import", "AAPL");
+        let listing =
+            ListingSnapshot::equity(InstrumentKey::new("AAPL", Market::Us), "import", "AAPL");
         let inst = Instrument {
             id: 1,
             key: listing.key.clone(),
@@ -273,5 +424,93 @@ mod tests {
         assert_eq!(row.change_pct, Some(10.0));
         assert!((row.amplitude.unwrap() - 13.0).abs() < 1e-9);
         assert_eq!(row.direction, "up");
+    }
+
+    fn sample_row(ts: &str, last: f64) -> QuoteRow {
+        QuoteRow {
+            trade_date: None,
+            received_at: None,
+            source_kind: "test".into(),
+            data_status: "test".into(),
+            instrument_id: 1,
+            symbol: "600519".into(),
+            market: "CN.SH".into(),
+            market_label: "沪市".into(),
+            board: "SH".into(),
+            board_label: "沪市".into(),
+            name: Some("贵州茅台".into()),
+            exchange: None,
+            currency: Some("CNY".into()),
+            status: "active".into(),
+            last: Some(last),
+            change: None,
+            change_pct: None,
+            open: Some(last),
+            high: Some(last),
+            low: Some(last),
+            prev_close: Some(100.0),
+            amplitude: None,
+            volume: None,
+            turnover: None,
+            ts: Some(ts.into()),
+            has_quote: true,
+            direction: "none".into(),
+            source: None,
+        }
+    }
+
+    fn sample_bar(ts: &str, close: f64) -> Bar {
+        Bar {
+            id: 1,
+            instrument_id: 1,
+            timeframe: crate::models::Timeframe::D1,
+            ts: ts.into(),
+            open: close - 1.0,
+            high: close + 1.0,
+            low: close - 2.0,
+            close,
+            adj_close: None,
+            volume: Some(1.0),
+            turnover: None,
+            source: "tushare.rt_k".into(),
+            ingested_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn session_bar_replaces_date_only_quote() {
+        let mut row = sample_row("2026-09-12", 9.0);
+        row.prev_close = Some(9.0);
+        prefer_session_last(&mut row, Some(&sample_bar("2026-09-12", 10.5)));
+        assert_eq!(row.last, Some(10.5));
+        assert_eq!(row.change, Some(1.5));
+    }
+
+    #[test]
+    fn daily_bar_does_not_clobber_timed_quote() {
+        let mut row = sample_row("2026-09-12T02:15:00Z", 11.0);
+        row.source = Some("tushare.rt_k".into());
+        let mut bar = sample_bar("2026-09-12", 10.5);
+        bar.source = "tushare.daily".into();
+        prefer_session_last(&mut row, Some(&bar));
+        assert_eq!(row.last, Some(11.0));
+    }
+
+    #[test]
+    fn rt_k_bar_aligns_header_with_session_close() {
+        let mut row = sample_row("2026-09-12T02:15:00Z", 11.0);
+        row.source = Some("tushare.rt_k".into());
+        prefer_session_last(&mut row, Some(&sample_bar("2026-09-12", 11.2)));
+        assert_eq!(row.last, Some(11.2));
+    }
+
+    #[test]
+    fn unparsable_quote_ts_keeps_live_last() {
+        let mut row = sample_row("not-a-timestamp", 11.0);
+        row.source = Some("tushare.rt_k".into());
+        let mut bar = sample_bar("2026-09-12", 9.0);
+        bar.source = "tushare.daily".into();
+        prefer_session_last(&mut row, Some(&bar));
+        assert_eq!(row.last, Some(11.0));
     }
 }

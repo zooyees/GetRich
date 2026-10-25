@@ -4,9 +4,21 @@ on:
   pull_request:
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: cargo fmt --all -- --check
       - run: cargo test --workspace
-      - run: cargo clippy --workspace --all-targets
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: node --experimental-vm-modules --test tests/web/*.test.cjs
+      - run: cargo build --workspace
+      - run: node tests/api/workstation.cjs

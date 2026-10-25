@@ -57,6 +57,8 @@ enum Commands {
     Import(ImportCmd),
     #[command(subcommand, arg_required_else_help = true)]
     Stock(StockCmd),
+    /// 市场态势框架（资金 / 板块 / 消息，数据源后续接入）。
+    Pulse,
 }
 
 #[derive(Subcommand, Debug)]
@@ -78,10 +80,24 @@ enum DbCmd {
 
 #[derive(Subcommand, Debug)]
 enum ImportCmd {
-    Bundle { #[arg(long)] file: PathBuf },
-    Listings { #[arg(long)] file: PathBuf },
-    Quotes { #[arg(long)] file: PathBuf },
-    Bars { #[arg(long)] file: PathBuf },
+    Bundle {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Listings {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Quotes {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Bars {
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// 从 Tushare 同步 A 股列表与最近交易日行情。
+    Tushare,
 }
 
 #[derive(Subcommand, Debug)]
@@ -193,7 +209,11 @@ fn attach_cmd(
     }
 }
 
-fn api_cmd(cmd: ApiCmd, url: Option<String>, opts: &OutputOptions) -> Result<i32, (String, AppError)> {
+fn api_cmd(
+    cmd: ApiCmd,
+    url: Option<String>,
+    opts: &OutputOptions,
+) -> Result<i32, (String, AppError)> {
     let url = url.unwrap_or_else(attach::default_url);
     match cmd {
         ApiCmd::Health => match attach::health(&url).and_then(attach::data_or_error) {
@@ -220,6 +240,7 @@ fn cmd_name(cmd: &Commands) -> &'static str {
         Commands::Db(_) => "db",
         Commands::Import(_) => "import",
         Commands::Stock(_) => "stock",
+        Commands::Pulse => "pulse",
         _ => "getrich",
     }
 }
@@ -244,6 +265,7 @@ fn cmd_to_invoke(cmd: &Commands) -> Result<(String, Value), AppError> {
             "import.file".into(),
             json!({"path": file.display().to_string(), "kind": "bars"}),
         )),
+        Commands::Import(ImportCmd::Tushare) => Ok(("tushare.sync".into(), json!({}))),
         Commands::Stock(StockCmd::List {
             board,
             query,
@@ -278,6 +300,7 @@ fn cmd_to_invoke(cmd: &Commands) -> Result<(String, Value), AppError> {
                 }),
             ))
         }
+        Commands::Pulse => Ok(("market.pulse".into(), json!({}))),
         _ => Err(AppError::InvalidArg("command not available here".into())),
     }
 }

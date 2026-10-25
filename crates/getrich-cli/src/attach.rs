@@ -51,7 +51,7 @@ fn call_json(url: &str, method: &str, body: Option<&Value>) -> Result<Value, Str
             return Err("POST missing JSON body".into());
         };
         ureq::post(url)
-            .timeout(Duration::from_secs(90))
+            .timeout(Duration::from_secs(180))
             .set("Content-Type", "application/json")
             .send_json(body)
     } else {
