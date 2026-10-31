@@ -82,7 +82,7 @@ cargo run -p getrich-cli -- stock show --symbol 600519 --market CN.SH --pretty
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\pack-windows.ps1
-# dist\GetRich-Windows-0.2.10-YYYYMMDD.zip
+# dist\GetRich-Windows-0.2.11-YYYYMMDD.zip
 ```
 
 图标：将官方 `D:\windlink\windlink\GetRich\icon\GetRich.ico` 覆盖仓库 `icon/GetRich.ico` 后重新打包。
