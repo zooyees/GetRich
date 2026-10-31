@@ -490,6 +490,26 @@ impl GetRichApp {
             ui.colored_label(up_color(), error);
         }
         ui.add_space(12.0);
+        let p = &self.settings_cache["provider"];
+        ui.small(format!(
+            "有效刷新间隔 {} 毫秒 · 按各接口额度自适应",
+            p["effective_poll_ms"]
+                .as_u64()
+                .unwrap_or(self.provider_poll)
+        ));
+        if let Some(limits) = p["api_limits"].as_array() {
+            for limit in limits {
+                ui.colored_label(
+                    Color32::from_rgb(219, 166, 78),
+                    format!(
+                        "{} · {} · 约 {} 秒后可重试",
+                        limit["api"].as_str().unwrap_or(""),
+                        limit["message"].as_str().unwrap_or(""),
+                        limit["remaining_seconds"]
+                    ),
+                );
+            }
+        }
         ui.colored_label(
             muted(),
             egui::RichText::new("连接测试验证日历访问；行情、市值与指数权限由相应同步任务报告。")
@@ -549,19 +569,7 @@ impl GetRichApp {
             });
         ui.add_space(10.0);
         field_label(ui, "行情列表宽度");
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::Slider::new(&mut self.preferences.list_width, 280.0..=900.0)
-                    .show_value(false),
-            );
-            ui.add_sized(
-                [64.0, 36.0],
-                egui::DragValue::new(&mut self.preferences.list_width)
-                    .range(280.0..=900.0)
-                    .speed(10),
-            );
-            ui.colored_label(muted(), "px");
-        });
+        ui.colored_label(muted(), "跟随窗口宽度的 20%；窄窗口使用单页布局");
         ui.add_space(6.0);
         field_label(ui, "工作区预设");
         ui.horizontal_wrapped(|ui| {
@@ -757,6 +765,14 @@ impl GetRichApp {
             "存储与诊断",
             "管理本地数据位置，查看近期记录和排障信息。",
         );
+        let local = &self.settings_cache["local_storage"];
+        ui.label(format!(
+            "本地缓存：{} 个响应 · {} 条历史 · {} 个已同步区间",
+            local["cached_responses"].as_u64().unwrap_or(0),
+            local["history_rows"].as_u64().unwrap_or(0),
+            local["covered_ranges"].as_u64().unwrap_or(0)
+        ));
+        ui.small("历史只补缺口；实时行情持续更新；成功响应自动落盘。");
         for (key, label) in [
             ("data_root", "数据目录"),
             ("db_path", "数据库文件"),

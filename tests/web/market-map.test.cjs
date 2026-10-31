@@ -26,16 +26,47 @@ test('missing configuration leaves refresh usable and empty configured stores bo
   assert.equal(g.model.requests.filter(r=>r.body?.method==='job.submit').length,1);
 });
 const deferred=()=>{let resolve;return {promise:new Promise(r=>resolve=r),resolve};};
+
+test('slow unchanged reads are coalesced and keep the last painted snapshot',async()=>{
+  const f=await fixture();await f.map.refresh();const previous=f.map.data;
+  const delayed=deferred();f.model.pending.push(delayed);const first=f.map.refresh();
+  const second=f.map.refresh();assert.equal(first,second);
+  assert.equal(f.map.data,previous);assert.equal(f.nodes.get('market-canvas')['aria-busy'],'true');
+  delayed.resolve({ok:true,json:async()=>snapshot('600002')});await first;
+  assert.equal(f.map.tiles()[0].quote.symbol,'600002');assert.equal(f.nodes.get('market-canvas')['aria-busy'],undefined);
+});
+
+test('changing filters retains the last canvas until the new response arrives',async()=>{
+  const f=await fixture();await f.map.refresh();const previous=f.map.data,delayed=deferred();
+  f.model.pending.push(delayed);const next=f.map.change({industry:'银行'});
+  assert.equal(f.map.data,previous);assert.equal(f.map.tiles().length,1);
+  delayed.resolve({ok:true,json:async()=>snapshot('600003')});await next;
+  assert.equal(f.map.tiles()[0].quote.symbol,'600003');
+});
+
+test('weight policy is sent explicitly and older cap dates are visible beside live quotes',async()=>{
+  const f=await fixture();
+  Object.assign(f.model.data,{historical:false,quote_mode:'realtime',metric:'float_market_cap',metric_label:'流通市值',weight_date_from:'2024-01-02',weight_date_to:'2024-01-02'});
+  f.model.data.coverage.lagged_weight=1;
+  await f.map.refresh();
+  assert.ok(f.model.requests.some(r=>r.url.includes('weight_policy=latest_available')));
+  assert.match(f.nodes.get('map-state').textContent,/实时快照/);
+  assert.match(f.nodes.get('map-metric-label').textContent,/收盘权重 2024-01-02/);
+  f.nodes.get('map-weight-policy').value='same_day';
+  await f.nodes.get('map-weight-policy').onchange();
+  assert.ok(f.model.requests.some(r=>r.url.includes('weight_policy=same_day')));
+});
 function snapshot(symbol='600001'){
   const q={symbol,name:'测试银行',market:'CN.SH',currency:'CNY',last:11,change_pct:10,trade_date:'2024-01-03',source:'fixture.daily',source_kind:'daily'};
   return {query:{board:'CN'},computed_at:'2024-01-03T12:00:00Z',data_version:1,trade_date:'2024-01-03',historical:true,currency:'CNY',metric:'equal',metric_label:'等面积',coverage:{universe:1,quoted:1,displayed:1,missing_quote:0,other_date:0,invalid:0,missing_weight:0,delayed:0,unclassified:0,up:1,down:0,flat:0,unknown_change:0},notes:['fixture'],groups:[{name:'银行',mean_pct:10,bounds:{x:0,y:0,w:1,h:1},tiles:[{key:'CN.SH:'+symbol,quote:q,industry:'银行',weight:1,bounds:{x:0,y:0,w:1,h:1}}]}]};
 }
 async function fixture(){
-  const nodes=new Map(),draws=[],listeners=new Map(),model={active:true,data:snapshot(),pending:[],opens:[],requests:[],configured:true,job:{id:42,status:'queued',phase:'等待执行',progress:0}};
-  const ctx=new Proxy({},{get:(_,key)=>key==='fillRect'?(...args)=>draws.push(args):()=>{},set:()=>true});
+  const nodes=new Map(),draws=[],copies=[],listeners=new Map(),model={active:true,data:snapshot(),pending:[],opens:[],requests:[],configured:true,job:{id:42,status:'queued',phase:'等待执行',progress:0}};
+  const ctx=new Proxy({},{get:(_,key)=>key==='fillRect'?(...args)=>draws.push(args):key==='drawImage'?(...args)=>copies.push(args):()=>{},set:()=>true});
   const node=id=>{if(!nodes.has(id))nodes.set(id,{id,hidden:false,value:'',checked:false,style:{},dataset:{},innerHTML:'',textContent:'',setAttribute(k,v){this[k]=v;},removeAttribute(k){delete this[k];},querySelectorAll:()=>[],getBoundingClientRect:()=>({left:0,top:0,width:1000,height:600}),getContext:()=>ctx,addEventListener(type,callback){listeners.set(id+':'+type,callback);},setPointerCapture(){},releasePointerCapture(){}});return nodes.get(id);};
-  const document={getElementById:node,documentElement:{dataset:{colors:'red_up'}},fullscreenElement:null};
-  const context=vm.createContext({console,document,window:{devicePixelRatio:2},URLSearchParams,AbortController,Intl,Date,ResizeObserver:class{observe(){}},setTimeout:()=>1,clearTimeout(){},fetch:async(url,options={})=>{
+  const frames=new Map();let frameId=0;
+  const document={getElementById:node,createElement:()=>({width:0,height:0,getContext:()=>ctx}),documentElement:{dataset:{colors:'red_up'}},fullscreenElement:null};
+  const context=vm.createContext({console,document,window:{devicePixelRatio:2},URLSearchParams,AbortController,Intl,Date,requestAnimationFrame:fn=>{frames.set(++frameId,fn);return frameId;},cancelAnimationFrame:id=>frames.delete(id),ResizeObserver:class{observe(){}},setTimeout:()=>1,clearTimeout(){},fetch:async(url,options={})=>{
       model.requests.push({url,body:options.body?JSON.parse(options.body):null});
       if(url==='/v1/settings')return {ok:true,json:async()=>({provider:{configured:model.configured}})};
       if(url==='/v1/invoke')return {ok:true,json:async()=>model.job};
@@ -43,8 +74,17 @@ async function fixture(){
     }});
   const cache=new Map();async function module(name){if(cache.has(name))return cache.get(name);const mod=new vm.SourceTextModule(fs.readFileSync(path.join(root,name),'utf8'),{context,identifier:name});cache.set(name,mod);await mod.link(spec=>module(spec.slice(1)));return mod;}
   const mod=await module('market-map.js');await mod.evaluate();const map=new mod.namespace.MarketMap({isActive:()=>model.active,openStock:q=>model.opens.push(q)});
-  return {map,model,nodes,draws,listeners,exports:mod.namespace,document};
+  return {map,model,nodes,draws,copies,listeners,exports:mod.namespace,document,frames};
 }
+
+test('pointer bursts paint once per frame and leaving the route cancels queued paint',async()=>{
+  const f=await fixture();await f.map.refresh();const before=f.draws.length,previousCopies=f.copies.length;
+  for(let i=0;i<120;i++)f.listeners.get('market-canvas:pointermove')({clientX:i%2?1200:500,clientY:300});
+  assert.equal(f.frames.size,1);assert.equal(f.draws.length,before);
+  const callback=[...f.frames.values()][0];f.frames.clear();callback();assert.equal(f.draws.length,before,'hover must reuse tile pixels');assert.equal(f.copies.length,previousCopies+1);
+  f.listeners.get('market-canvas:pointermove')({clientX:500,clientY:300});
+  assert.equal(f.frames.size,1);f.model.active=false;f.map.deactivate();assert.equal(f.frames.size,0);
+});
 test('heatmap paints, selects and opens the underlying instrument',async()=>{
   const f=await fixture();await f.map.refresh();assert.ok(f.draws.length>1);assert.equal(f.map.hits.length,1);assert.match(f.nodes.get('map-state').textContent,/历史截面/);
   f.listeners.get('market-canvas:pointerdown')({clientX:500,clientY:300,pointerId:1});
@@ -52,6 +92,17 @@ test('heatmap paints, selects and opens the underlying instrument',async()=>{
   assert.equal(f.map.selected,'CN.SH:600001');assert.equal(f.nodes.get('map-selected-name').textContent,'测试银行');
   f.nodes.get('map-open-stock').onclick();assert.equal(f.model.opens[0].symbol,'600001');
   f.listeners.get('market-canvas:dblclick')({clientX:500,clientY:300});assert.equal(f.model.opens.length,2);
+});
+
+test('cached canvas retains hover pixels but invalidates for live data, search, colors and zoom',async()=>{
+  const f=await fixture();await f.map.refresh();let count=f.draws.length;
+  f.map.hover='CN.SH:600001';f.map.selected='CN.SH:600001';f.map.draw();
+  assert.equal(f.draws.length,count);assert.equal(f.map.hits[0].tile.quote.symbol,'600001');
+  f.map.search='银行';f.map.draw();assert.ok(f.draws.length>count);count=f.draws.length;
+  f.document.documentElement.dataset.colors='green_up';f.map.draw();assert.ok(f.draws.length>count);count=f.draws.length;
+  f.map.view={scale:2,x:-100,y:-100};f.map.draw();assert.ok(f.draws.length>count);count=f.draws.length;
+  f.model.data=snapshot('600002');await f.map.refresh();assert.ok(f.draws.length>count);
+  assert.equal(f.map.hits[0].tile.quote.symbol,'600002');assert.equal(f.map.view.scale,2);
 });
 test('late map responses cannot overwrite newer filters or a route change',async()=>{
   const f=await fixture(),old=deferred();f.model.pending.push(old);const first=f.map.refresh();

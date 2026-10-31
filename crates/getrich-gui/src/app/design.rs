@@ -147,33 +147,14 @@ pub(super) fn page_title(ui: &mut egui::Ui, eyebrow: &str, title: &str, note: &s
 }
 pub(super) fn draw_quote_summary(ui: &mut egui::Ui, detail: &StockDetail) {
     let q = &detail.quote;
-    ui.horizontal_wrapped(|ui| {
-        ui.colored_label(
-            muted(),
-            egui::RichText::new(format!(
-                "报价 {} · {} · {}",
-                q.trade_date.as_deref().unwrap_or("—"),
-                q.data_status,
-                q.source.as_deref().unwrap_or("来源未标明")
-            ))
-            .size(11.0),
-        );
-        if q.source_kind == "daily" {
-            ui.colored_label(
-                Color32::from_rgb(202, 164, 95),
-                egui::RichText::new("日线 / 日期精度").size(10.0),
-            );
-        }
-    });
-    ui.add_space(5.0);
     let fields = [
-        ("今开", fmt(q.open)),
-        ("最高", fmt(q.high)),
-        ("最低", fmt(q.low)),
-        ("昨收", fmt(q.prev_close)),
-        ("成交量", vol(q.volume)),
-        ("成交额", amount(q.turnover, q.currency.as_deref())),
-        ("振幅", pct(q.amplitude)),
+        ("今开", fmt(q.open), q.open),
+        ("最高", fmt(q.high), q.high),
+        ("最低", fmt(q.low), q.low),
+        ("昨收", fmt(q.prev_close), None),
+        ("成交量", vol(q.volume), None),
+        ("成交额", amount(q.turnover, q.currency.as_deref()), None),
+        ("振幅", pct(q.amplitude), None),
         (
             "行业",
             detail
@@ -181,17 +162,43 @@ pub(super) fn draw_quote_summary(ui: &mut egui::Ui, detail: &StockDetail) {
                 .industry
                 .clone()
                 .unwrap_or_else(|| "未分类".into()),
+            None,
         ),
     ];
-    let columns = if ui.available_width() > 1050.0 { 8 } else { 4 };
-    for row in fields.chunks(columns) {
-        ui.columns(columns, |cols| {
-            for ((label, value), col) in row.iter().zip(cols) {
-                col.colored_label(muted(), egui::RichText::new(*label).size(12.0));
-                col.label(egui::RichText::new(value).size(14.0));
+    egui::Frame::none()
+        .inner_margin(Vec2::new(0.0, 3.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = Vec2::new(12.0, 2.0);
+            ui.spacing_mut().interact_size.y = 22.0;
+            let columns = if ui.available_width() >= 1180.0 { 8 } else { 4 };
+            let width = (ui.available_width() - 12.0 * (columns - 1) as f32) / columns as f32;
+            for row in fields.chunks(columns) {
+                ui.horizontal(|ui| {
+                    for (label, value, price) in row {
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(width, 22.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_width(width);
+                                ui.set_min_height(22.0);
+                                ui.colored_label(muted(), egui::RichText::new(*label).size(11.0));
+                                let color = match price.zip(q.prev_close) {
+                                    Some((p, c)) if p > c => up_color(),
+                                    Some((p, c)) if p < c => down_color(),
+                                    _ => text_color(),
+                                };
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(value).size(13.0).color(color),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(value);
+                            },
+                        );
+                    }
+                });
             }
         });
-        ui.add_space(5.0);
-    }
-    ui.separator();
 }

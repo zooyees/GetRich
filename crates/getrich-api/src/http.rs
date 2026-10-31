@@ -21,6 +21,7 @@ const APP_CSS: &str = include_str!("../web/app.css");
 const APP_JS: &str = include_str!("../web/app.js");
 const RUNTIME_JS: &str = include_str!("../web/runtime.js");
 const CHART_JS: &str = include_str!("../web/chart.js");
+const BAR_REFRESH_JS: &str = include_str!("../web/bar-refresh.js");
 const WATCH_SEARCH_JS: &str = include_str!("../web/watch-search.js");
 const STOCK_RESEARCH_JS: &str = include_str!("../web/stock-research.js");
 const MANAGEMENT_JS: &str = include_str!("../web/management.js");
@@ -131,6 +132,11 @@ fn handle_request(mut request: Request, app: &App, running: &AtomicBool) -> Resu
             "application/javascript; charset=utf-8",
             STOCK_RESEARCH_JS.as_bytes(),
         ),
+        (Method::Get, "/bar-refresh.js") => respond_bytes(
+            request,
+            "text/javascript; charset=utf-8",
+            BAR_REFRESH_JS.as_bytes(),
+        ),
         (Method::Get, "/chart.js") => respond_bytes(
             request,
             "application/javascript; charset=utf-8",
@@ -148,7 +154,7 @@ fn handle_request(mut request: Request, app: &App, running: &AtomicBool) -> Resu
         ),
         (Method::Get, "/v2/market-map") => {
             let mut params = serde_json::Map::new();
-            for key in ["board", "metric", "industry"] {
+            for key in ["board", "metric", "industry", "weight_policy"] {
                 if let Some(value) = qparam(query, key) {
                     params.insert(key.into(), json!(value));
                 }
@@ -169,7 +175,7 @@ fn handle_request(mut request: Request, app: &App, running: &AtomicBool) -> Resu
             "application/javascript; charset=utf-8",
             PULSE_JS.as_bytes(),
         ),
-        (Method::Get, "/v1/health") => match app.stats() {
+        (Method::Get, "/v1/health") => match app.health_stats() {
             Ok(stats) => respond_json(
                 request,
                 200,

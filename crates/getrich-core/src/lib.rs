@@ -5,11 +5,13 @@
 //! `import`, read models in `view`, orchestration in `service`, JSON invoke
 //! in `invoke`.
 
+pub mod bar_refresh;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod events;
 pub mod import;
+pub mod indicators;
 pub mod ingest;
 pub mod invoke;
 pub mod jobs;

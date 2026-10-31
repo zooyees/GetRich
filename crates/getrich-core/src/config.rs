@@ -36,6 +36,7 @@ pub struct UiPreferences {
     pub list_width: f32,
     pub columns: Vec<String>,
     pub recent: Vec<String>,
+    pub moving_averages: Vec<usize>,
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -51,6 +52,7 @@ impl Default for UiPreferences {
                 "turnover".into(),
             ],
             recent: Vec::new(),
+            moving_averages: crate::indicators::MA_PERIODS.to_vec(),
         }
     }
 }
@@ -108,7 +110,7 @@ pub struct DataConfig {
     pub pulse: PulseConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TushareConfig {
     #[serde(default)]
     pub user_id: String,

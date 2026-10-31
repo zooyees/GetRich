@@ -31,6 +31,8 @@ pub struct App {
     default_board: Mutex<String>,
     pub(crate) config_write: Mutex<()>,
     provider: Mutex<Option<(String, Arc<tushare::Client>)>>,
+    stats_cache: Mutex<Option<(std::time::Instant, StoreStats)>>,
+    pub(crate) map_cache: Mutex<std::collections::VecDeque<crate::market_map::CacheEntry>>,
     pub events: EventHub,
     pub ingest: IngestState,
     pub realtime: RealtimeState,
@@ -70,6 +72,8 @@ impl App {
             default_board,
             config_write: Mutex::new(()),
             provider: Mutex::new(None),
+            stats_cache: Mutex::new(None),
+            map_cache: Mutex::new(std::collections::VecDeque::new()),
             events: EventHub::new(),
             ingest: IngestState::new(),
             realtime: RealtimeState::default(),
@@ -93,6 +97,8 @@ impl App {
             default_board,
             config_write: Mutex::new(()),
             provider: Mutex::new(None),
+            stats_cache: Mutex::new(None),
+            map_cache: Mutex::new(std::collections::VecDeque::new()),
             events: EventHub::new(),
             ingest: IngestState::new(),
             realtime: RealtimeState::default(),
@@ -129,7 +135,32 @@ impl App {
     }
 
     pub fn stats(&self) -> Result<StoreStats, AppError> {
-        self.with_retry(|conn| self.stats_on(conn))
+        let stats = self.with_retry(|conn| self.stats_on(conn))?;
+        *self.stats_cache.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((std::time::Instant::now(), stats.clone()));
+        Ok(stats)
+    }
+    pub fn health_stats(&self) -> Result<StoreStats, AppError> {
+        self.with_retry(|conn| self.board_stats_on(conn))
+    }
+    fn board_stats_on(&self, conn: &Connection) -> Result<StoreStats, db::DbError> {
+        let cached = self
+            .stats_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < Duration::from_secs(30))
+            .map(|(_, s)| s.clone());
+        let mut stats = if let Some(stats) = cached {
+            stats
+        } else {
+            let stats = self.stats_on(conn)?;
+            *self.stats_cache.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((std::time::Instant::now(), stats.clone()));
+            stats
+        };
+        stats.last_quote_ts = conn.query_row("SELECT MAX(ts) FROM quotes", [], |r| r.get(0))?;
+        Ok(stats)
     }
 
     pub fn market_pulse(&self) -> MarketPulse {
@@ -156,10 +187,11 @@ impl App {
         &self,
         conn: &Connection,
     ) -> Result<MarketPulse, AppError> {
+        let provider = self.tushare_cfg();
         crate::pulse::compute(
             conn,
             &self.cfg.data.pulse,
-            self.cfg.data.tushare.poll_ms.max(1),
+            crate::ingest::effective_interval(self, &provider),
             &self.watchlist(),
             chrono::Utc::now(),
         )
@@ -211,6 +243,11 @@ impl App {
         for i in 1..=attempts {
             match import::apply_bundle(&self.db, bundle, source) {
                 Ok(v) => {
+                    *self.stats_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    self.map_cache
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clear();
                     if emit_event {
                         crate::ingest::emit_ingest_done(
                             &self.events,
@@ -279,13 +316,74 @@ impl App {
             .with_retry(|conn| db::latest_success(conn, "quotes", "tushare"))
             .ok()
             .flatten();
+        let limits = self
+            .tushare_client()
+            .and_then(|client| client.api_limits())
+            .unwrap_or_else(|_| serde_json::json!([]));
+        let phase = self
+            .ingest
+            .phase
+            .lock()
+            .ok()
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        let permission = limits.as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|r| r["api"] == "rt_k" && r["kind"] == "permission")
+        });
+        let retry = limits
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|r| r["api"] == "rt_k")
+                    .filter_map(|r| r["remaining_seconds"].as_u64())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        let state = if c.token.trim().is_empty() {
+            "unconfigured"
+        } else if !c.enabled {
+            "disabled"
+        } else if permission || phase == "permission_denied" {
+            "permission_denied"
+        } else if retry > 0 {
+            "rate_limited"
+        } else {
+            &phase
+        };
+        let message = match state {
+            "unconfigured" => "未配置实时数据源",
+            "disabled" => "自动采集已关闭",
+            "permission_denied" => "实时日线接口权限不可用 · 显示已保存行情",
+            "rate_limited" => "实时接口限流等待 · 保留上一截面",
+            "outside_session" => "非交易时段：暂停服务器行情轮询，星图仍自动读取本地数据",
+            "closed_day" => "交易日历确认休市",
+            "checking_calendar" => "正在校验交易日历",
+            "fetching" => "正在获取实时行情",
+            "live" => "自动刷新正常",
+            "live_quote_verified" => "自动刷新正常 · 以当日报价时间校验",
+            "error" => "实时采集失败 · 保留上一截面",
+            _ => "实时采集等待启动",
+        };
+        let realtime_success = last_ok.clone().or_else(|| {
+            self.with_retry(|conn| db::latest_success(conn, "quotes", "tushare.rt_k"))
+                .ok()
+                .flatten()
+        });
         serde_json::json!({
+            "realtime_status":{"state":state,"message":message,"retry_after_seconds":retry,
+                "last_attempt_at":self.ingest.last_attempt.lock().ok().and_then(|v|v.clone()),
+                "last_success_at":realtime_success,"duration_ms":self.ingest.duration_ms.load(std::sync::atomic::Ordering::Relaxed),
+                "consecutive_failures":self.ingest.failures.load(std::sync::atomic::Ordering::Relaxed)},
             "configured": !c.token.trim().is_empty(),
             "user_id": c.user_id,
             "token_mask": tushare::mask_token(&c.token),
             "source": "tushare",
             "enabled": c.enabled,
             "poll_ms": c.poll_ms,
+            "effective_poll_ms": crate::ingest::effective_interval(self,&c),
+            "api_limits": limits,
             "universe": c.universe,
             "rt_k_codes": c.rt_k_codes,
             "live_timeout_ms": c.live_timeout_ms,
@@ -464,7 +562,9 @@ impl App {
         let watch = self.watch_keys();
 
         self.with_retry(|conn| {
-            let stats = self.stats_on(conn)?;
+            let tx = conn.unchecked_transaction()?;
+            let conn: &Connection = &tx;
+            let stats = self.board_stats_on(conn)?;
             let mut q = QuoteBoardQuery {
                 scope: BoardScope::parse(&board_s, watch.clone()),
                 query: if query_s.trim().is_empty() {
@@ -563,6 +663,8 @@ impl App {
 
     pub fn show_stock(&self, key: &InstrumentKey) -> Result<StockDetail, AppError> {
         let found = self.with_retry(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let conn: &Connection = &tx;
             let Some(listing) = db::get_listing(conn, key)? else {
                 return Ok(None);
             };
@@ -660,8 +762,12 @@ impl App {
         use chrono::Datelike;
         let limit = if limit == 0 { 500 } else { limit.min(20000) };
         self.with_retry(|conn| {
+            // OHLC, SMA warmup and revision share one committed read snapshot.
+            let tx = conn.unchecked_transaction()?;
+            let conn: &Connection = &tx;
             let Some(listing) = db::get_listing(conn, key)? else {
                 return Ok(BarPage {
+                    moving_averages: Vec::new(),
                     basis_timeframe: timeframe.as_str().into(),
                     partial_last_period: false,
                     data_version: db::latest_batch_version(conn)?,
@@ -682,11 +788,20 @@ impl App {
             };
             let mut basis_timeframe = timeframe.as_str();
             let mut rows = db::list_bars(conn, listing.id, timeframe, from, to, limit)?;
+            let daily = if timeframe == Timeframe::D1 && from.is_none() && limit == 20000 {
+                rows.clone()
+            } else {
+                db::list_bars(conn, listing.id, Timeframe::D1, None, to, 20000)?
+            };
             if matches!(timeframe, Timeframe::W1 | Timeframe::Mo1) {
-                let daily = db::list_bars(conn, listing.id, Timeframe::D1, from, to, 20000)?;
-                if !daily.is_empty() {
+                let display_daily = if from.is_none() {
+                    daily.clone()
+                } else {
+                    db::list_bars(conn, listing.id, Timeframe::D1, from, to, 20000)?
+                };
+                if !display_daily.is_empty() {
                     basis_timeframe = "1d";
-                    rows = crate::resample::resample_bars(&daily, timeframe);
+                    rows = crate::resample::resample_bars(&display_daily, timeframe);
                 }
                 if rows.len() > limit {
                     rows = rows[rows.len() - limit..].to_vec();
@@ -702,6 +817,7 @@ impl App {
                 ))
             };
             Ok(BarPage {
+                moving_averages: crate::indicators::daily_averages(&daily, &rows),
                 basis_timeframe: basis_timeframe.into(),
                 partial_last_period: rows
                     .last()

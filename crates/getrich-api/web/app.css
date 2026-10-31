@@ -1,4 +1,5 @@
 :root{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color-scheme:dark;--bg:#0c121d;--surface:#131e2e;--surface-2:#192538;--text:#e4edf9;--muted:#8f9fb7;--line:#26344a;--accent:#76a7ff;--up:#ff7182;--down:#45c79a;--selected:#213858;--list-width:440px;font-synthesis:none}
+.status-dot.degraded{color:#dba64e}.status-dot.degraded::before{background:#dba64e}
 :root[data-theme=light]{color-scheme:light;--bg:#f0f3f8;--surface:#fff;--surface-2:#f6f8fc;--text:#202e44;--muted:#68788f;--line:#e0e6ef;--accent:#2b67d7;--up:#c63248;--down:#167d59;--selected:#edf3ff}
 @media(prefers-color-scheme:light){:root[data-theme=system]{color-scheme:light;--bg:#f0f3f8;--surface:#fff;--surface-2:#f6f8fc;--text:#202e44;--muted:#68788f;--line:#e0e6ef;--accent:#2b67d7;--up:#c63248;--down:#167d59;--selected:#edf3ff}}
 :root[data-colors=green_up]{--up:#45c79a;--down:#ff7182}
@@ -37,3 +38,66 @@
 .watch-search-bar{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:12px}#watch-search-results{max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin:0 0 16px}
 #watch-search-results button{display:flex;justify-content:space-between;gap:20px;width:100%;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:9px 14px;text-align:left}#watch-search-results button strong{overflow:hidden;text-overflow:ellipsis}#watch-search-results button span{flex-shrink:0;color:var(--muted)}#watch-search-results button.on{background:var(--selected);outline:1px solid var(--accent);outline-offset:-1px}
 @media(max-width:700px){#view-pulse .map-status-left{min-width:205px}#view-pulse .map-status-meta{display:block}#view-pulse .map-status-meta #map-scope{display:block}.watch-search-bar{grid-template-columns:minmax(0,1fr) 110px}}
+/* Stock detail: a consistent metric grid and a single chart control strip. */
+.pane-detail{container-type:inline-size}.quote-strip{grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 20px;margin:12px 0;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.quote-strip dt{font-size:11px;margin-bottom:5px}.quote-strip dd{font-size:14px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}
+#research-tabs{gap:4px;margin:8px 0;padding-bottom:8px;border-bottom:1px solid var(--line)}#research-tabs button{flex:1;max-width:145px;min-height:32px;padding:5px 9px}
+.detail-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}
+.detail-toolbar .segments{margin:0}.detail-toolbar #tf-tabs{margin-right:auto}.detail-toolbar button{min-height:29px;padding:4px 9px;font-size:12px}.detail-toolbar .chart-actions{gap:4px}.detail-toolbar #research-refresh{white-space:nowrap}
+#research-status{margin:6px 0;font-size:12px}#history-range{margin:0}#history-range p{margin:6px 0;font-size:12px}.chart-meta{margin:6px 0;height:20px;font-size:11px}.chart-caption{padding:7px 0 12px;font-size:11px}
+@container(min-width:960px){.quote-strip{grid-template-columns:repeat(8,minmax(0,1fr));gap:14px}}
+@container(max-width:430px){.quote-strip{gap:12px;padding:12px}.detail-toolbar{gap:6px}#research-tabs button{font-size:11px;padding:5px}.detail-toolbar .chart-actions{order:3;width:100%}}
+.workspace{grid-template-columns:minmax(230px,20vw) minmax(0,1fr);gap:12px}.boards{display:flex;align-items:center;gap:10px;padding:10px 12px;font-size:12px;color:var(--muted)}.boards select{flex:1;min-width:0;font-size:12px;padding:5px 8px;min-height:32px}.pane-heading{padding:16px 12px 8px}.pane-heading h2{font-size:16px}.quote-table td,.quote-table th{padding:9px 6px;font-size:11px}.quote-table th button{font-size:10px}.quote-table .name{max-width:90px}
+.detail-hero{justify-content:flex-start;align-items:center;gap:22px;padding-bottom:12px}.detail-hero>div:first-child{max-width:240px}.detail-hero h1{font-size:25px}.detail-px{text-align:left}.detail-px strong{font-size:29px}.detail-hero #watch-btn{margin-left:auto;align-self:center;flex-shrink:0}
+/* Compact stock header: identity, inline metrics, research tabs, chart controls. */
+.pane-detail{padding:16px 24px}
+.detail-hero{gap:14px;padding-bottom:4px;border-bottom:0;min-height:44px}
+.detail-hero h1{font-size:22px;margin-bottom:0;line-height:1.25}
+.detail-hero p{font-size:11px;margin:0;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.detail-px strong{font-size:24px}.detail-px p{font-size:12px;margin:0;line-height:16px}
+.detail-hero #watch-btn{min-height:28px;padding:3px 10px}
+#detail-time{font-size:10px}
+.quote-strip{margin:3px 0 5px;padding:3px 0;border:0;border-radius:0;background:transparent;gap:4px 12px}
+.quote-strip dt{margin:0;font-size:11px;line-height:15px}.quote-strip dd{font-size:13px;line-height:17px}
+#research-tabs{background:transparent;border:0;border-bottom:1px solid var(--line);border-radius:0;margin:0 0 5px;padding:0 0 3px;gap:4px}
+#research-tabs button{min-height:26px;max-width:132px;padding:3px 9px;font-size:12px}
+#kline{height:clamp(300px,calc(100dvh - 330px),800px)}
+/* Align the sidebar controls and table edges without changing column widths. */
+.quote-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px 12px}
+.quote-filters label{display:grid;gap:5px;min-width:0;color:var(--muted);font-size:11px}
+.quote-filters select{width:100%;min-width:0;min-height:32px;font-size:12px;padding:5px 6px}
+.pane-list .filter-row{margin:0 12px;padding:4px 0 8px;min-height:32px;border-top:0;background:transparent}
+.pane-list>.table-wrap{margin:0 12px}.quote-table th button{width:100%;text-align:left;justify-content:flex-start}
+.quote-table th.num button{text-align:right;justify-content:flex-end}.quote-table td:first-child,.quote-table th:first-child{padding-left:0}
+.quote-table td:last-child,.quote-table th:last-child{padding-right:0}
+.pagination{padding:10px 12px}
+/* Single-line groups keep the chart dominant while preserving reading order. */
+.detail-hero{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:0;min-height:30px}
+.detail-hero>div:first-child,.detail-hero>.detail-px{display:contents}
+.detail-hero h1{order:0;margin:0;font-size:22px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#detail-code{order:1;font-size:11px;margin:0}#detail-last{order:2;font-size:24px;line-height:30px}#detail-chg{order:3;margin:0;font-size:12px}
+#detail-time{order:4;margin:0 0 0 auto;max-width:280px;font-size:10px} .detail-hero #watch-btn{order:5;margin:0;min-height:28px}
+.quote-strip{grid-template-columns:repeat(4,minmax(0,1fr));gap:3px 12px;margin:3px 0;padding:3px 0}
+.quote-strip>div{display:flex;align-items:baseline;gap:6px;min-width:0;min-height:22px}
+.quote-strip dt{flex-shrink:0;white-space:nowrap;line-height:22px}.quote-strip dd{min-width:0;line-height:22px}
+.detail-toolbar{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:3px 8px;align-items:center;padding:4px 8px;border-radius:6px}
+.detail-toolbar #research-tabs{grid-column:1;grid-row:1}.detail-toolbar #tf-tabs{grid-column:2;grid-row:1}.detail-toolbar #chart-actions{grid-column:3;grid-row:1}.detail-toolbar #research-refresh{grid-column:4;grid-row:1}
+.detail-toolbar #research-tabs{margin:0;padding:0;border:0;background:transparent;gap:4px}
+.detail-toolbar #research-tabs button{flex:none;width:100px;min-height:26px;padding:3px 6px;font-size:12px}
+.detail-toolbar #tf-tabs{margin:0;gap:2px;padding:1px}.detail-toolbar #tf-tabs button{min-width:40px;padding:3px 6px}
+.detail-toolbar button{min-height:28px}.detail-toolbar #chart-actions{width:auto;justify-self:end;gap:4px}
+.detail-toolbar #chart-actions button{min-width:28px;padding:3px 6px}.detail-toolbar #research-refresh{justify-self:end;min-width:110px}
+#chart-readout{grid-column:1/-1;grid-row:2;display:flex;gap:2px 14px;align-items:center;flex-wrap:wrap;min-width:0}
+#chart-readout p{margin:0;line-height:18px;font-size:11px;height:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#chart-readout #kline-meta{font-size:12px}#chart-range{color:var(--muted)}
+#ma-controls{grid-column:1/-1;grid-row:3;display:grid;grid-template-columns:28px minmax(0,1fr);gap:8px;align-items:start;padding-top:0;border-top:0}
+#ma-controls .ma-heading{padding-top:3px;font-size:11px;color:var(--muted)}
+.ma-options{display:grid;grid-template-columns:repeat(6,minmax(0,184px));gap:3px 8px}
+#ma-controls label{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:4px;align-items:center;min-width:0;padding:2px 4px;background:transparent;border:0;border-radius:0;color:var(--ma-color);font-size:12px;cursor:pointer}
+#ma-controls label:has(input:not(:checked)){color:var(--muted)}#ma-controls input{margin:0;width:13px;height:13px;min-height:0;accent-color:var(--ma-color)}
+#ma-controls label span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#ma-controls output{font-family:Consolas,monospace;font-variant-numeric:tabular-nums}
+@container(min-width:1180px){.quote-strip{grid-template-columns:repeat(8,minmax(0,1fr))}}
+@container(max-width:1160px){.ma-options{grid-template-columns:repeat(3,minmax(0,184px))}}
+@container(max-width:1000px){.detail-toolbar{grid-template-columns:auto minmax(0,1fr) auto}.detail-toolbar #research-tabs{grid-column:1/-1;grid-row:1}.detail-toolbar #tf-tabs{grid-column:1;grid-row:2}.detail-toolbar #chart-actions{grid-column:2;grid-row:2}.detail-toolbar #research-refresh{grid-column:3;grid-row:2}#chart-readout{grid-row:3}#ma-controls{grid-row:4}#detail-time{display:none}}
+@container(max-width:600px){.detail-toolbar{gap:3px 8px;grid-template-columns:minmax(0,1fr) auto}.detail-toolbar #tf-tabs{grid-column:1/-1}.detail-toolbar #chart-actions{grid-column:1;grid-row:3;justify-self:start;order:0;width:auto}.detail-toolbar #research-refresh{grid-column:2;grid-row:3}#chart-readout{grid-row:4}#ma-controls{grid-row:5}.ma-options{grid-template-columns:repeat(2,minmax(0,184px))}.detail-toolbar #research-tabs button{width:auto;flex:1;min-width:0}.quote-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container(max-width:436px){.ma-options{grid-template-columns:minmax(0,184px)}}

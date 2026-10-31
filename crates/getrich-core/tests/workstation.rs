@@ -38,9 +38,11 @@ struct Workspace {
 }
 impl Workspace {
     fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let root = std::env::temp_dir().join(format!(
-            "getrich-workstation-{}-{}",
+            "getrich-workstation-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
             Utc::now().timestamp_nanos_opt().unwrap()
         ));
         std::fs::create_dir_all(&root).unwrap();
@@ -67,6 +69,56 @@ impl Drop for Workspace {
 }
 fn quote(symbol: &str, ts: &str, last: f64) -> Value {
     json!({"symbol":symbol,"market":"CN.SH","ts":ts,"last":last,"prev_close":10.0})
+}
+
+#[test]
+fn daily_moving_averages_warm_up_before_limited_windows_and_align_to_weekly_bars() {
+    let w = Workspace::new();
+    let first = chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let bars:Vec<_>=(0..300).map(|i|json!({"symbol":"600001","market":"CN.SH","timeframe":"1d","ts":(first+chrono::Duration::days(i)).to_string(),"open":i as f64+1.0,"close":i as f64+1.0,"high":i as f64+2.0,"low":i as f64+0.5})).collect();
+    w.apply(json!({"listings":[{"symbol":"600001","market":"CN.SH"}],"bars":bars}));
+    let key = w.app.parse_key("600001", Some("CN.SH")).unwrap();
+    for tf in [Timeframe::D1, Timeframe::W1, Timeframe::Mo1] {
+        let page = w.app.list_bars(&key, tf, None, None, 1).unwrap();
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(
+            page.moving_averages
+                .iter()
+                .find(|m| m.period == 250)
+                .unwrap()
+                .values,
+            vec![Some(175.5)]
+        );
+    }
+    let from = (first + chrono::Duration::days(290)).to_string();
+    let page = w
+        .app
+        .list_bars(&key, Timeframe::D1, Some(&from), None, 20)
+        .unwrap();
+    assert_eq!(
+        page.moving_averages
+            .iter()
+            .find(|m| m.period == 250)
+            .unwrap()
+            .values[0],
+        Some(166.5)
+    );
+    w.app
+        .save_settings(&json!({"preferences":{"moving_averages":[]}}))
+        .unwrap();
+    assert_eq!(
+        w.app.settings_view().unwrap()["preferences"]["moving_averages"],
+        json!([])
+    );
+    let reopened = App::at_path(AppConfig::default(), w.root.join("test.db"));
+    assert_eq!(
+        reopened.settings_view().unwrap()["preferences"]["moving_averages"],
+        json!([])
+    );
+    assert!(w
+        .app
+        .save_settings(&json!({"preferences":{"moving_averages":[999]}}))
+        .is_err());
 }
 
 #[test]
@@ -189,6 +241,53 @@ fn dated_weights_cannot_be_replaced_by_older_data_or_inherit_a_missing_date() {
         .unwrap();
     assert_eq!(undated.coverage.displayed, 0);
     assert_eq!(undated.coverage.missing_weight, 1);
+}
+
+#[test]
+fn recent_weight_policy_keeps_intraday_quotes_with_dated_caps_and_rejects_future_or_old_caps() {
+    use getrich_core::market_map::MapQuery;
+    let w = Workspace::new();
+    w.apply(json!({"listings":[
+        {"symbol":"600001","market":"CN.SH","metadata":[{"key":"float_market_cap","value":"200000000","as_of":"2024-01-02"}]},
+        {"symbol":"600002","market":"CN.SH","metadata":[{"key":"float_market_cap","value":"300000000","as_of":"2024-01-04"}]},
+        {"symbol":"600003","market":"CN.SH","metadata":[{"key":"float_market_cap","value":"400000000","as_of":"2023-12-20"}]}
+    ],"quotes":[
+        {"symbol":"600001","market":"CN.SH","ts":"2024-01-03 10:00:00","last":11.0,"prev_close":10.0,"source":"tushare.rt_k"},
+        {"symbol":"600002","market":"CN.SH","ts":"2024-01-03 10:00:00","last":12.0,"prev_close":10.0,"source":"tushare.rt_k"},
+        {"symbol":"600003","market":"CN.SH","ts":"2024-01-03 10:00:00","last":13.0,"prev_close":10.0,"source":"tushare.rt_k"}
+    ]}));
+    let strict = w
+        .app
+        .market_map(MapQuery {
+            metric: "float_market_cap".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(strict.coverage.displayed, 0);
+    let dated = w
+        .app
+        .market_map(MapQuery {
+            metric: "float_market_cap".into(),
+            weight_policy: "latest_available".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(dated.coverage.displayed, 1);
+    assert_eq!(dated.coverage.missing_weight, 2);
+    assert_eq!(dated.coverage.lagged_weight, 1);
+    assert_eq!(dated.trade_date.as_deref(), Some("2024-01-03"));
+    assert_eq!(dated.weight_date_from.as_deref(), Some("2024-01-02"));
+    assert_eq!(dated.quote_mode, "realtime");
+    assert_eq!(dated.groups[0].tiles[0].weight, 200000000.0);
+    assert_eq!(dated.groups[0].tiles[0].quote.last, Some(11.0));
+    assert!(dated.notes.iter().any(|n| n.contains("未估算为实时值")));
+    assert!(w
+        .app
+        .market_map(MapQuery {
+            weight_policy: "invalid".into(),
+            ..Default::default()
+        })
+        .is_err());
 }
 fn bar(day: &str, close: f64) -> Value {
     json!({"symbol":"600001","market":"CN.SH","ts":day,"open":10.0,"high":close.max(12.0),"low":9.0,"close":close,"volume":10.0})

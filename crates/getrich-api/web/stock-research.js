@@ -10,7 +10,7 @@ export class StockResearch {
   constructor({current,configured,reload,isActive}){
     this.current=current;this.configured=configured;this.reload=reload;this.isActive=isActive;this.key="";this.tab="history";this.intraday=false;this.data={};this.attempted=new Set();this.jobs=new Map();this.pending=new Set();this.errors=new Map();this.generation=0;
     $("research-tabs").onclick=event=>{const tab=event.target.closest("[data-research]")?.dataset.research;if(!tab)return;this.tab=tab;this.render();this.ensure(tab).catch(e=>this.fail(tab,e));};
-    $("research-refresh").onclick=()=>this.ensure(this.section(),true).catch(e=>this.fail(this.section(),e));
+    $("research-refresh").onclick=()=>{if(!this.configured()){location.hash="#/settings";return;}this.ensure(this.section(),true).catch(e=>this.fail(this.section(),e));};
     setInterval(()=>{if(this.isActive()&&this.section()==="intraday")this.update();},30000);
     new ResizeObserver(()=>this.draw()).observe($("intraday-canvas"));
     $("intraday-canvas").onpointermove=event=>{const rect=event.target.getBoundingClientRect();this.hover=(event.clientX-rect.left-60)/(rect.width-120)*240;this.draw();};
@@ -19,9 +19,11 @@ export class StockResearch {
   section(){return this.tab==="history"&&this.intraday?"intraday":this.tab;}
   id(section){return this.key+":"+section;}
   fail(section,error){this.errors.set(this.id(section),error.message);this.render();}
-  async update(){
+  async update(force=false){
     const quote=this.current();if(!quote)return;
     const key=quote.market+":"+quote.symbol;
+    if(!force&&key===this.key&&this.readConfigured===this.configured()&&Date.now()-(this.readAt||0)<30000)return;
+    this.readAt=Date.now();this.readConfigured=this.configured();
     if(key!==this.key){this.key=key;this.data={};this.generation++;}
     const generation=this.generation;
     try{const data=await invoke("stock.research",{symbol:quote.symbol,market:quote.market});if(generation!==this.generation||key!==this.key||!this.isActive())return;this.data=data;this.render();await this.ensure("history");if(this.section()!=="history")await this.ensure(this.section());}
@@ -42,7 +44,7 @@ export class StockResearch {
     clearTimeout(this.timers?.get(id));this.timers||=new Map();
     this.timers.set(id,setTimeout(async()=>{
       if(!this.isActive()||!id.startsWith(this.key+":")){this.jobs.delete(id);return;}
-      try{const job=await invoke("job.get",{id:jobId});this.jobs.set(id,job);this.render();if(active(job))this.poll(id,jobId);else{await this.update();if(id.endsWith(":history"))await this.reload();}}
+      try{const job=await invoke("job.get",{id:jobId});this.jobs.set(id,job);this.render();if(active(job))this.poll(id,jobId);else{await this.update(true);if(id.endsWith(":history"))await this.reload();}}
       catch(e){this.errors.set(id,e.message);this.jobs.delete(id);this.render();}
     },1500));
   }
@@ -52,15 +54,16 @@ export class StockResearch {
     const section=this.section(),id=this.id(section),job=this.jobs.get(id),pending=this.pending.has(id)||active(job);
     $("research-tabs").querySelectorAll("button").forEach(button=>{const selected=button.dataset.research===this.tab;button.setAttribute("aria-selected",String(selected));button.classList.toggle("active",selected);});
     $("candle-panel").hidden=this.tab!=="history"||this.intraday;$("intraday-panel").hidden=section!=="intraday";$("research-panel").hidden=this.tab==="history";
-    $("research-refresh").disabled=pending;$("research-refresh").textContent=section==="history"?"更新完整历史":"刷新数据";
-    const message=this.errors.get(id)||job?.error||job?.result?.warnings?.join("；")||(pending?`${statusZh(job?.status||"queued")} ${job?.phase||"正在提交"}`:!this.configured()?"连接 Tushare 后可获取数据":"");
-    $("research-status").textContent=message;$("research-status").className=job?.error||this.errors.has(id)?"error":"muted";
+    $("tf-tabs").hidden=this.tab!=="history";$("chart-readout").hidden=section!=="history";$("ma-controls").hidden=section!=="history";$("chart-actions").hidden=section!=="history";
+    $("research-refresh").disabled=pending;$("research-refresh").textContent=!this.configured()?"配置数据源":section==="history"?"更新完整历史":"刷新数据";
+    const message=this.errors.get(id)||job?.error||job?.result?.warnings?.join("；")||(pending?`${statusZh(job?.status||"queued")} ${job?.phase||"正在提交"}`:"");
+    $("research-status").hidden=!message;$("research-status").textContent=message;$("research-status").className=job?.error||this.errors.has(id)?"error":"muted";
     const ds=this.data.datasets||{};
     if(section==="intraday"){$("intraday-note").innerHTML=note(ds.intraday);this.draw();}
     if(this.tab==="f10")this.renderF10(ds);
     if(this.tab==="funds")this.renderFunds(ds.funds);
     if(this.tab==="announcements")this.renderAnnouncements(ds.announcements);
-    if(section==="history")$("history-range").innerHTML=note(ds.history);
+    if(section==="history"){$("history-range").title=`${ds.history?.source||"Tushare"} · 数据日期 ${ds.history?.as_of||"—"} · 获取 ${ds.history?.updated_at?time(ds.history.updated_at):"尚未获取"}`;$("chart-range").title=$("history-range").title;$("history-range").innerHTML=ds.history?.error?`<p class="error">${esc(ds.history.error)}</p>`:"";}
   }
   renderF10(ds){
     const c=ds.company?.rows?.[0]||{},f=ds.financial?.rows?.[0]||{},v=ds.valuation?.rows?.[0]||{};

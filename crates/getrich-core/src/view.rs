@@ -103,6 +103,8 @@ pub struct QuoteBoardPage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BarPage {
+    /// Always uses daily closes, including for weekly/monthly display bars.
+    pub moving_averages: Vec<crate::indicators::MovingAverage>,
     pub basis_timeframe: String,
     pub partial_last_period: bool,
     pub data_version: u64,

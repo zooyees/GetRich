@@ -5,12 +5,25 @@ use crate::{
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+pub struct MarketSnapshot {
+    pub bundle: ImportBundle,
+    pub live: bool,
+    pub warnings: Vec<String>,
+}
+
 pub trait DataProvider: Send + Sync {
     fn id(&self) -> &'static str;
     fn markets(&self) -> &'static [&'static str];
     fn test_connection(&self) -> Result<Value, AppError>;
     fn listings(&self) -> Result<ImportBundle, AppError>;
     fn snapshot(&self) -> Result<ImportBundle, AppError>;
+    fn market_snapshot(&self) -> Result<MarketSnapshot, AppError> {
+        Ok(MarketSnapshot {
+            bundle: self.snapshot()?,
+            live: false,
+            warnings: Vec::new(),
+        })
+    }
     fn valuations(&self) -> Result<ImportBundle, AppError>;
     fn indices(&self) -> Result<ImportBundle, AppError>;
     fn valuations_at(&self, _date: &str) -> Result<ImportBundle, AppError> {
@@ -39,6 +52,10 @@ impl DataProvider for Client {
     fn snapshot(&self) -> Result<ImportBundle, AppError> {
         self.board_bundle(false)
     }
+    fn market_snapshot(&self) -> Result<MarketSnapshot, AppError> {
+        let live = session_live(self)?;
+        acquire_snapshot(self, live)
+    }
     fn valuations(&self) -> Result<ImportBundle, AppError> {
         self.valuations_bundle()
     }
@@ -54,6 +71,40 @@ impl DataProvider for Client {
     fn history(&self, key: &InstrumentKey, from: &str, to: &str) -> Result<ImportBundle, AppError> {
         self.bars_bundle(key, from, to)
     }
+}
+fn session_live(client: &Client) -> Result<bool, AppError> {
+    Ok(crate::session::in_poll_window()
+        && client.last_open_day()? == crate::session::yyyymmdd(crate::session::shanghai_today()))
+}
+fn acquire_snapshot(client: &Client, live: bool) -> Result<MarketSnapshot, AppError> {
+    if live {
+        // Manual refresh always covers all A shares, even if background polling is watch-only.
+        match client.live_board_bundle(&crate::tushare::quote_batches(
+            "6*.SH,0*.SZ,3*.SZ,8*.BJ,4*.BJ,9*.BJ",
+        )) {
+            Ok(bundle) => {
+                return Ok(MarketSnapshot {
+                    bundle,
+                    live: true,
+                    warnings: Vec::new(),
+                })
+            }
+            Err(error) => {
+                return Ok(MarketSnapshot {
+                    bundle: client.board_bundle(false)?,
+                    live: false,
+                    warnings: vec![format!(
+                        "实时采集不可用：{error}；本次返回已发布的收盘行情，未标为实时。"
+                    )],
+                })
+            }
+        }
+    }
+    Ok(MarketSnapshot {
+        bundle: client.board_bundle(false)?,
+        live: false,
+        warnings: Vec::new(),
+    })
 }
 impl App {
     pub fn data_provider(&self, id: &str) -> Result<Arc<dyn DataProvider>, AppError> {

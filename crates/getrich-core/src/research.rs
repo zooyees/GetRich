@@ -43,7 +43,19 @@ fn cache(conn: &Connection, key: &InstrumentKey, dataset: &str) -> Result<Value,
         _ => 86_400,
     };
     let fresh = age("updated_at").is_some_and(|s| s < ttl);
-    let cooldown = age("attempted_at").is_some_and(|s| s < 60) && !v["error"].is_null();
+    let retry_seconds = v["error"]
+        .as_str()
+        .map(|error| {
+            if crate::tushare::permission_denied(error) {
+                600
+            } else {
+                crate::tushare::cooldown_ms(error).div_ceil(1000) as i64
+            }
+        })
+        .unwrap_or(0);
+    let remaining = (retry_seconds - age("attempted_at").unwrap_or(retry_seconds)).max(0);
+    let cooldown = remaining > 0 && !v["error"].is_null();
+    v["retry_after_seconds"] = json!(remaining);
     let has_rows = v["rows"].as_array().is_some_and(|a| !a.is_empty());
     v["needs_refresh"] = json!(!fresh && !cooldown);
     v["status"] = json!(if !v["error"].is_null() {
@@ -339,7 +351,19 @@ fn fetch(
         "intraday"=>("stk_mins",json!({"ts_code":code,"freq":"1min","start_date":format!("{} 09:00:00",day.format("%Y-%m-%d")),"end_date":format!("{} 15:30:00",day.format("%Y-%m-%d"))}),"ts_code,trade_time,open,close,high,low,vol,amount"),
         _=>return Err(AppError::InvalidArg("未知资料集".into())),
     };
-    let table = client.call(api, params, fields)?;
+    let table = if api == "rt_min_daily" {
+        client.call_live(api, params, fields)?
+    } else if matches!(api, "daily_basic" | "moneyflow") {
+        client.history_table(
+            api,
+            &code,
+            params["start_date"].as_str().unwrap(),
+            date,
+            fields,
+        )?
+    } else {
+        client.call(api, params, fields)?
+    };
     Ok((
         format!("Tushare · {api}"),
         normalize(objects(table, &code)?, dataset, date)?,
@@ -442,6 +466,38 @@ pub(crate) fn execute(app: &App, id: i64, p: &Value) -> Result<Value, AppError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hourly_minute_limit_survives_the_old_one_minute_retry_window() {
+        let path = std::env::temp_dir().join(format!(
+            "getrich-hourly-cache-{}-{}.db",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let store = db::Database::at(&path);
+        let conn = store.connect().unwrap();
+        let key = crate::symbol::parse_instrument("600001", Some("CN.SH")).unwrap();
+        save(
+            &conn,
+            &key,
+            "intraday",
+            "Tushare · stk_mins",
+            Err(AppError::Message(
+                "Tushare stk_mins: 频率超限(1次/小时)".into(),
+            )),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE stock_research SET attempted_at=?1",
+            [(Utc::now() - chrono::Duration::seconds(61)).to_rfc3339()],
+        )
+        .unwrap();
+        let result = cache(&conn, &key, "intraday").unwrap();
+        assert_eq!(result["needs_refresh"], false);
+        assert!(result["retry_after_seconds"].as_i64().unwrap() > 3500);
+        drop(conn);
+        let _ = std::fs::remove_file(path);
+    }
     #[test]
     fn minute_series_is_sorted_deduplicated_filtered_and_vwap_uses_shares() {
         let rows = normalize(

@@ -29,7 +29,7 @@ async function waitJob(base,id){for(let i=0;i<150;i++){const job=await invoke(ba
 (async()=>{
   const a=await server();let before;
   await check('embedded modules and settings contract',async()=>{
-    for(const url of ['/','/app.js','/runtime.js','/chart.js','/stock-research.js','/watch-search.js','/pulse.js','/market-map.js','/management.js']){const r=await fetch(a+url);assert.equal(r.status,200);assert.ok((await r.text()).length>100);}
+    for(const url of ['/','/app.js','/runtime.js','/bar-refresh.js','/chart.js','/stock-research.js','/watch-search.js','/pulse.js','/market-map.js','/management.js']){const r=await fetch(a+url);assert.equal(r.status,200);assert.ok((await r.text()).length>100);}
     const settings=await api(a,'/v1/settings');assert.equal(settings.default_board,'ALL');assert.equal(settings.provider.configured,false);assert.ok(!JSON.stringify(settings).includes('"token":'));
     const bad=await fetch(a+'/v1/invoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'settings.save',params:{default_board:'INVALID'}})});assert.equal(bad.status,400);
   });
@@ -75,10 +75,26 @@ async function waitJob(base,id){for(let i=0;i<150;i++){const job=await invoke(ba
     assert.equal(cap.coverage.displayed,0);assert.equal(cap.coverage.missing_weight,6001);
     const bad=await fetch(a+'/v2/market-map?board=ALL');assert.equal(bad.status,400);
   });
+  await check('HTTP market map preserves explicit dated-weight policy and rejects unknown policy',async()=>{
+    const quoteDate=new Date().toISOString().slice(0,10),previous=new Date(Date.parse(quoteDate)-86400000).toISOString().slice(0,10);
+    await invoke(a,'import.json',{data:{listings:[{symbol:'600000',market:'CN.SH',metadata:[{key:'float_market_cap',value:'200000000',as_of:previous,source:'acceptance.daily_basic'}]}]}});
+    const strict=await api(a,'/v2/market-map?board=CN&industry=Acceptance&metric=float_market_cap&weight_policy=same_day');assert.equal(strict.coverage.displayed,0);
+    const dated=await api(a,'/v2/market-map?board=CN&industry=Acceptance&metric=float_market_cap&weight_policy=latest_available');
+    assert.equal(dated.coverage.displayed,1);assert.equal(dated.coverage.lagged_weight,1);assert.equal(dated.weight_date_from,previous);assert.equal(dated.trade_date,quoteDate);
+    const bad=await fetch(a+'/v2/market-map?weight_policy=invalid');assert.equal(bad.status,400);
+    const provider=await api(a,'/v1/tushare');assert.ok(provider.effective_poll_ms>=provider.poll_ms);assert.ok(Array.isArray(provider.api_limits));
+  });
   await check('manual recompute publishes coherent input and snapshot versions',async()=>{
     const job=await invoke(a,'job.submit',{kind:'pulse.recompute',params:{}});assert.equal((await waitJob(a,job.id)).status,'succeeded');
     const snapshot=await api(a,'/v2/pulse');assert.ok(snapshot.snapshot_revision>0);assert.ok(snapshot.snapshot_version>0);assert.equal(typeof snapshot.config_version,'number');assert.ok(snapshot.calendar_version);assert.equal(snapshot.quality.universe_scope,'imported_sample');assert.equal(snapshot.pulse.data_quality.valid,snapshot.quality.quoted_valid);
     const next=await invoke(a,'job.submit',{kind:'pulse.recompute',params:{}});assert.equal((await waitJob(a,next.id)).status,'succeeded');assert.ok((await api(a,'/v2/pulse')).snapshot_revision>snapshot.snapshot_revision);
+  });
+  await check('daily averages retain warmup across limited daily weekly monthly responses and persist switches',async()=>{
+    const bars=Array.from({length:300},(_,i)=>({symbol:'689999',market:'CN.SH',timeframe:'1d',ts:new Date(Date.UTC(2024,0,1+i)).toISOString().slice(0,10),open:i+1,close:i+1,high:i+2,low:i+.5}));
+    await invoke(a,'import.json',{data:{listings:[{symbol:'689999',market:'CN.SH'}],bars}});
+    for(const tf of ['1d','1w','1mo']){const page=await api(a,`/v1/stocks/CN.SH/689999/bars?timeframe=${tf}&limit=1`);assert.equal(page.rows.length,1);assert.equal(page.moving_averages.length,6);assert.equal(page.moving_averages.find(m=>m.period===250).values[0],175.5);}
+    await invoke(a,'settings.save',{preferences:{moving_averages:[]}});assert.deepEqual((await api(a,'/v1/settings')).preferences.moving_averages,[]);
+    const invalid=await fetch(a+'/v1/invoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'settings.save',params:{preferences:{moving_averages:[999]}}})});assert.equal(invalid.status,400);
   });
   fs.writeFileSync(path.join(root,'results.json'),JSON.stringify({root,results},null,2));console.log(JSON.stringify({root,passed:results.length}));
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{for(const c of controllers)c.abort();for(const child of children)child.kill();await sleep(300);});

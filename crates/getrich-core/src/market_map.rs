@@ -9,7 +9,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MapQuery {
     pub board: String,
@@ -17,6 +17,8 @@ pub struct MapQuery {
     pub industry: String,
     pub aspect: f64,
     pub watch_only: bool,
+    /// same_day preserves the original API contract; clients opt into bounded dated weights.
+    pub weight_policy: String,
 }
 impl Default for MapQuery {
     fn default() -> Self {
@@ -26,6 +28,7 @@ impl Default for MapQuery {
             industry: String::new(),
             aspect: 1.6,
             watch_only: false,
+            weight_policy: "same_day".into(),
         }
     }
 }
@@ -64,6 +67,7 @@ pub struct MapCoverage {
     pub other_date: usize,
     pub invalid: usize,
     pub missing_weight: usize,
+    pub lagged_weight: usize,
     pub delayed: usize,
     pub unclassified: usize,
     pub up: usize,
@@ -79,6 +83,9 @@ pub struct MarketMap {
     pub data_version: u64,
     pub trade_date: Option<String>,
     pub historical: bool,
+    pub quote_mode: String,
+    pub weight_date_from: Option<String>,
+    pub weight_date_to: Option<String>,
     pub currency: String,
     pub metric: String,
     pub metric_label: String,
@@ -104,6 +111,13 @@ struct Weight {
 }
 type Metadata = HashMap<(i64, String), Weight>;
 
+pub(crate) struct CacheEntry {
+    pub built: std::time::Instant,
+    pub settings: u64,
+    pub date: String,
+    pub value: MarketMap,
+}
+
 impl App {
     pub fn market_map(&self, mut query: MapQuery) -> Result<MarketMap, AppError> {
         if ![
@@ -127,10 +141,40 @@ impl App {
         {
             return Err(AppError::InvalidArg("不支持的星图面积指标".into()));
         }
+        if !["same_day", "latest_available"].contains(&query.weight_policy.as_str()) {
+            return Err(AppError::InvalidArg("不支持的市值日期策略".into()));
+        }
         if !query.aspect.is_finite() {
             query.aspect = 1.6;
         }
         query.aspect = query.aspect.clamp(0.25, 5.0);
+        let conn = self.db.connect()?;
+        let version = db::latest_batch_version(&conn)?;
+        let settings: u64 = conn
+            .query_row(
+                "SELECT value FROM app_state WHERE key='settings_version'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db::DbError::from)?;
+        let date = crate::session::iso_date(crate::session::shanghai_today());
+        if let Some(value) = self
+            .map_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|c| {
+                c.built.elapsed() < std::time::Duration::from_secs(30)
+                    && c.settings == settings
+                    && c.date == date
+                    && c.value.data_version == version
+                    && c.value.query == query
+            })
+            .map(|c| c.value.clone())
+        {
+            return Ok(value);
+        }
+        drop(conn);
         let read = || -> Result<MarketMap, db::DbError> {
             let watch: HashSet<_> = self
                 .watchlist()
@@ -273,10 +317,22 @@ impl App {
                 keep
             });
             coverage.quoted = candidates.len();
+            let live_count = candidates
+                .iter()
+                .filter(|(_, _, q)| q.source.as_deref().is_some_and(|s| s.contains("rt_k")))
+                .count();
+            let quote_mode = if live_count == 0 {
+                "daily"
+            } else if live_count == candidates.len() {
+                "realtime"
+            } else {
+                "mixed"
+            }
+            .to_string();
             let current_cap = |q: &QuoteRow, key: &str| {
-                metadata
-                    .get(&(q.instrument_id, key.into()))
-                    .filter(|v| v.date == date)
+                metadata.get(&(q.instrument_id, key.into())).filter(|v| {
+                    valid_weight_date(v.date.as_deref(), date.as_deref(), &query.weight_policy)
+                })
             };
             let metric = if query.metric == "auto" {
                 let n = candidates.len();
@@ -312,6 +368,7 @@ impl App {
                 _ => "等面积",
             }
             .to_string();
+            let mut weight_dates = std::collections::BTreeSet::new();
             let mut grouped = BTreeMap::<String, Vec<MapTile>>::new();
             let mut sources = HashSet::new();
             for (key, industry, quote) in candidates {
@@ -332,6 +389,14 @@ impl App {
                     coverage.missing_weight += 1;
                     continue;
                 };
+                if ["float_market_cap", "market_cap"].contains(&metric.as_str()) {
+                    if let Some(weight_date) = &weight.date {
+                        weight_dates.insert(weight_date.clone());
+                    }
+                    if weight.date != date {
+                        coverage.lagged_weight += 1;
+                    }
+                }
                 if quote.data_status == "报价延迟" {
                     coverage.delayed += 1;
                 }
@@ -396,14 +461,17 @@ impl App {
             let mut notes=vec!["范围仅为本地已导入的在市股票，覆盖率不代表全市场完整率。行业沿用来源分类，非申万二级行业。".into(),"只显示同一交易日的有效报价；缺失涨跌幅以灰色表示，行业涨跌为有效成分的等权均值。".into()];
             if query.metric == "auto" {
                 notes.push(format!(
-                    "自动面积当前使用{label}；至少 90% 同日样本具备流通市值时优先使用市值。"
+                    "自动面积当前使用{label}；至少 90% 样本具备所选日期策略下的有效流通市值时优先使用市值。"
                 ));
             }
             if coverage.missing_weight > 0 {
                 notes.push(format!(
-                    "{} 只缺少同日有效{label}，未参与面积计算；可切换等面积查看。",
+                    "{} 只缺少所选日期策略下的有效{label}，未参与面积计算；可切换等面积查看。",
                     coverage.missing_weight
                 ));
+            }
+            if coverage.lagged_weight > 0 {
+                notes.push(format!("{} 只采用最近有效收盘市值作面积权重，允许最多落后 7 个自然日，日期分别标注；颜色和价格仍取报价日，市值未估算为实时值。",coverage.lagged_weight));
             }
             if historical {
                 notes.push("历史截面：当前颜色和价格不代表实时行情。".into());
@@ -424,6 +492,9 @@ impl App {
                 data_version: version,
                 trade_date: date,
                 historical,
+                quote_mode,
+                weight_date_from: weight_dates.first().cloned(),
+                weight_date_to: weight_dates.last().cloned(),
                 currency: currency.into(),
                 metric,
                 metric_label: label,
@@ -434,11 +505,35 @@ impl App {
                 indices,
             })
         };
-        read().map_err(Into::into)
+        let value = read().map_err(AppError::from)?;
+        let mut cache = self.map_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= 6 {
+            cache.pop_front();
+        }
+        cache.push_back(CacheEntry {
+            built: std::time::Instant::now(),
+            settings,
+            date,
+            value: value.clone(),
+        });
+        Ok(value)
     }
 }
 fn positive(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn valid_weight_date(weight: Option<&str>, quote: Option<&str>, policy: &str) -> bool {
+    let Some((weight, quote)) = weight.zip(quote).and_then(|(w, q)| {
+        Some((
+            chrono::NaiveDate::parse_from_str(w, "%Y-%m-%d").ok()?,
+            chrono::NaiveDate::parse_from_str(q, "%Y-%m-%d").ok()?,
+        ))
+    }) else {
+        return false;
+    };
+    let lag = (quote - weight).num_days();
+    lag == 0 || (policy == "latest_available" && (1..=7).contains(&lag))
 }
 fn valid_quote(q: &QuoteRow, currency: &str, today: &str) -> bool {
     let Some(last) = q.last else {

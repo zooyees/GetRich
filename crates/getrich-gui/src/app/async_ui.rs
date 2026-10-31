@@ -29,7 +29,10 @@ impl GetRichApp {
             self.change_filter.clone(),
             self.page_offset,
         );
-        self.loading = true;
+        if !open && self.controller.is_pending("read:board") {
+            return;
+        }
+        self.loading = open;
         if let Err(e) = self.controller.submit("read:board", move |core| {
             core.quote_board_filtered(
                 Some(&board),
@@ -49,6 +52,7 @@ impl GetRichApp {
     }
     pub(super) fn refresh_from_db(&mut self) {
         self.reload_board(false);
+        self.refresh_current_quote();
     }
     pub(super) fn read_settings(&mut self) {
         if let Err(e) = self.controller.submit("read:settings", |core| {
@@ -129,7 +133,7 @@ impl GetRichApp {
             .and_then(|i| page.rows.get(i))
             .map(|r| (r.symbol.clone(), r.market.clone()));
         self.page = Some(page);
-        if self.detail_pinned {
+        if self.detail_pinned || (!open && self.pending_key.is_some()) {
             return;
         }
         if let Some((symbol, market)) = next {
@@ -219,7 +223,15 @@ impl GetRichApp {
             return;
         }
         self.settings_tick = Some(Instant::now());
-        if let Err(e) = self.controller.submit("read:jobs", |core| {
+        if matches!(
+            self.screen,
+            Screen::Settings | Screen::Pulse | Screen::Quotes | Screen::Detail
+        ) {
+            let _ = self.controller.submit_background("read:provider", |core| {
+                Ok(Payload::Provider(core.tushare_status()))
+            });
+        }
+        if let Err(e) = self.controller.submit_background("read:jobs", |core| {
             core.jobs_list()
                 .map(Payload::Jobs)
                 .map_err(|e| e.to_string())
@@ -252,27 +264,14 @@ impl GetRichApp {
                         self.market.error = Some(error.clone());
                     }
                     if reply.tag == "read:map" {
-                        self.market.error = Some(error.clone());
-                        self.market.loading = false;
+                        self.fail_map(error);
+                        continue;
                     }
                     self.error = Some(error);
                     self.loading = false;
                     self.detail_loading = false;
                 }
-                Ok(Payload::Map(map)) => {
-                    self.market.loading = false;
-                    let q = &map.query;
-                    let current = &self.market.query;
-                    if q.board == current.board
-                        && q.metric == current.metric
-                        && q.industry == current.industry
-                        && q.watch_only == current.watch_only
-                    {
-                        self.error = None;
-                        self.market.error = None;
-                        self.market.data = Some(Arc::new(*map));
-                    }
-                }
+                Ok(Payload::Map(map)) => self.accept_map(*map),
                 Ok(Payload::Stats(stats)) => self.stats = Some(stats),
                 Ok(Payload::Board(page, open)) => self.apply_board(page, open),
                 Ok(Payload::WatchSearch(query, market, page)) => {
@@ -290,16 +289,43 @@ impl GetRichApp {
                         self.stock.data = value;
                     }
                 }
-                Ok(Payload::Stock(detail, bars)) => {
+                Ok(Payload::Quote(mut detail)) => {
+                    if self.pending_key.as_ref() == Some(&detail.listing.key) {
+                        self.preserve_newer_quote(&mut detail);
+                        self.detail = Some(*detail);
+                    }
+                }
+                Ok(Payload::Bars(key, bars, from)) => {
+                    if self.pending_key.as_ref() == Some(&key) && bars.timeframe == self.tf.as_str()
+                    {
+                        if let (Some(base), Some(from)) = (self.bars.as_mut(), from.as_deref()) {
+                            getrich_core::bar_refresh::merge_tail(base, bars, from);
+                        } else {
+                            self.bars = Some(bars);
+                        }
+                    }
+                }
+                Ok(Payload::Stock(mut detail, bars)) => {
                     if self.pending_key.as_ref() == Some(&detail.listing.key)
                         && bars.timeframe == self.tf.as_str()
                     {
                         self.detail_loading = false;
+                        self.preserve_newer_quote(&mut detail);
                         self.detail = Some(*detail);
-                        self.bars = Some(bars);
+                        if self.bars.as_ref().is_none_or(|b| {
+                            b.timeframe != bars.timeframe
+                                || b.symbol != bars.symbol
+                                || b.market != bars.market
+                                || b.data_version <= bars.data_version
+                        }) {
+                            self.bars = Some(bars);
+                        }
                         self.error = None;
                         self.read_research();
                     }
+                }
+                Ok(Payload::Provider(value)) => {
+                    self.settings_cache["provider"] = value;
                 }
                 Ok(Payload::Settings(value)) => {
                     if self.provider_token.is_empty() {
@@ -326,11 +352,23 @@ impl GetRichApp {
                                 .join(",")
                         })
                         .unwrap_or_default();
-                    if signature != self.job_signature {
+                    let completed = value["jobs"].as_array().is_some_and(|rows| {
+                        rows.iter().any(|job| {
+                            matches!(
+                                job["status"].as_str(),
+                                Some("succeeded" | "failed" | "cancelled" | "partial")
+                            ) && self.jobs_cache["jobs"]
+                                .as_array()
+                                .and_then(|old| old.iter().find(|j| j["id"] == job["id"]))
+                                .is_none_or(|old| old["status"] != job["status"])
+                        })
+                    });
+                    if signature != self.job_signature && completed {
                         self.job_signature = signature;
                         self.reload_stats();
                         self.read_research();
-                        self.reload_bars();
+                        self.refresh_current_bars(true);
+                        self.refresh_current_quote();
                         if self.screen == Screen::Pulse {
                             self.reload_map();
                         }
@@ -349,6 +387,10 @@ impl GetRichApp {
                     self.jobs_cache = value;
                 }
                 Ok(Payload::Action(purpose, value)) => {
+                    if purpose == "ma-preferences" {
+                        self.settings_cache = value;
+                        continue;
+                    }
                     self.loading = false;
                     self.error = None;
                     if purpose.starts_with("research:") {

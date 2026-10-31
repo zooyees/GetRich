@@ -3,6 +3,7 @@ use crate::{import::ImportBundle, models::InstrumentKey};
 struct Provider {
     empty: bool,
     optional_failure: bool,
+    live: bool,
 }
 impl DataProvider for Provider {
     fn id(&self) -> &'static str {
@@ -23,10 +24,23 @@ impl DataProvider for Provider {
         }
         Ok(serde_json::from_value(json!({"quotes":[{"symbol":"600001","market":"CN.SH","ts":"2026-10-23","last":10.0,"prev_close":9.0,"turnover":1000000.0,"currency":"CNY","source":"fixture.daily"}]})).unwrap())
     }
+    fn market_snapshot(&self) -> Result<crate::providers::MarketSnapshot, AppError> {
+        Ok(crate::providers::MarketSnapshot {
+            bundle: self.snapshot()?,
+            live: self.live,
+            warnings: Vec::new(),
+        })
+    }
     fn valuations(&self) -> Result<ImportBundle, AppError> {
+        if self.live {
+            return self.valuations_at("20261023");
+        }
         panic!("must request quote date")
     }
     fn indices(&self) -> Result<ImportBundle, AppError> {
+        if self.live {
+            return self.indices_at("20261023");
+        }
         panic!("must request quote date")
     }
     fn valuations_at(&self, date: &str) -> Result<ImportBundle, AppError> {
@@ -34,7 +48,7 @@ impl DataProvider for Provider {
         if self.optional_failure {
             return Err(AppError::Message("daily_basic 权限不足".into()));
         }
-        Ok(serde_json::from_value(json!({"listings":[{"symbol":"600001","market":"CN.SH","metadata":[{"key":"float_market_cap","value":"1000000","as_of":"2026-10-23","source":"fixture"}]}]})).unwrap())
+        Ok(serde_json::from_value(json!({"listings":[{"symbol":"600001","market":"CN.SH","metadata":[{"key":"float_market_cap","value":"1000000","as_of":if self.live{"2026-10-22"}else{"2026-10-23"},"source":"fixture"}]}]})).unwrap())
     }
     fn indices_at(&self, date: &str) -> Result<ImportBundle, AppError> {
         assert_eq!(date, "20261023");
@@ -48,9 +62,11 @@ impl DataProvider for Provider {
     }
 }
 fn workspace() -> (App, std::path::PathBuf) {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let root = std::env::temp_dir().join(format!(
-        "getrich-map-sync-{}-{}",
+        "getrich-map-sync-{}-{}-{}",
         std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         session::shanghai_now().timestamp_nanos_opt().unwrap()
     ));
     std::fs::create_dir_all(&root).unwrap();
@@ -69,6 +85,7 @@ fn optional_permissions_do_not_discard_quotes_and_all_datasets_use_quote_date() 
             &Provider {
                 empty: false,
                 optional_failure,
+                live: false,
             },
         )
         .unwrap();
@@ -101,6 +118,7 @@ fn optional_permissions_do_not_discard_quotes_and_all_datasets_use_quote_date() 
             &Provider {
                 empty: false,
                 optional_failure,
+                live: false,
             },
         )
         .unwrap();
@@ -117,7 +135,8 @@ fn empty_quotes_never_become_successful_refresh() {
         task["id"].as_i64().unwrap(),
         &Provider {
             empty: true,
-            optional_failure: false
+            optional_failure: false,
+            live: false,
         }
     )
     .unwrap_err()
@@ -125,6 +144,36 @@ fn empty_quotes_never_become_successful_refresh() {
     .contains("行情接口"));
     assert_eq!(app.stats().unwrap().listings, 0);
     assert_eq!(app.stats().unwrap().quotes, 0);
+    drop(app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn live_refresh_uses_available_published_weights_without_demanding_todays_close() {
+    let (app, root) = workspace();
+    let task = app.submit_job("market.sync", json!({})).unwrap();
+    let result = execute(
+        &app,
+        task["id"].as_i64().unwrap(),
+        &Provider {
+            empty: false,
+            optional_failure: false,
+            live: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(result["status"], "succeeded");
+    assert_eq!(result["quote_mode"], "realtime");
+    assert_eq!(result["displayed"], 1);
+    assert_eq!(result["metric"], "float_market_cap");
+    let map = app
+        .market_map(crate::market_map::MapQuery {
+            weight_policy: "latest_available".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(map.weight_date_from.as_deref(), Some("2026-10-22"));
+    assert_eq!(map.coverage.lagged_weight, 1);
     drop(app);
     let _ = std::fs::remove_dir_all(root);
 }

@@ -3,6 +3,74 @@ use super::*;
 use getrich_core::import::{parse_json, ImportKind};
 
 #[test]
+fn full_market_pagination_stays_visible_in_the_one_fifth_sidebar() {
+    let (mut app, root) = super::interaction_tests::workspace();
+    let mut page = app
+        .core
+        .quote_board(Some("CN"), None, None, 200, 0, None)
+        .unwrap();
+    let row = page.rows[0].clone();
+    page.rows = (0..200)
+        .map(|i| {
+            let mut row = row.clone();
+            row.symbol = format!("{i:06}");
+            row
+        })
+        .collect();
+    page.count = 200;
+    page.matched = 6000;
+    app.stats = Some(app.core.stats().unwrap());
+    app.page = Some(page);
+    app.loading = false;
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    GetRichApp::install_theme(&ctx);
+    for size in [
+        Vec2::new(1024.0, 768.0),
+        Vec2::new(1440.0, 900.0),
+        Vec2::new(1920.0, 1080.0),
+    ] {
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.ui_navigation(ctx);
+                    app.ui_quotes(ctx);
+                },
+            );
+            for label in ["上一页", "下一页"] {
+                let (bounds, clip) = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| {
+                        if let egui::Shape::Text(t) = &s.shape {
+                            if t.galley.job.text == label {
+                                return Some((
+                                    t.galley.rect.translate(t.pos.to_vec2()),
+                                    s.clip_rect,
+                                ));
+                            }
+                        }
+                        None
+                    })
+                    .expect("pagination must be painted");
+                assert!(
+                    bounds.bottom() <= size.y
+                        && bounds.right() <= size.x * 0.2 + 1.0
+                        && clip.contains_rect(bounds),
+                    "pager {label} is clipped at {size:?}: {bounds:?} clip {clip:?}"
+                );
+            }
+        }
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn all_workspaces_layout_at_minimum_and_large_window_sizes() {
     let root = std::env::temp_dir().join(format!(
         "getrich-ui-layout-{}-{}",
@@ -214,8 +282,102 @@ fn all_workspaces_layout_at_minimum_and_large_window_sizes() {
                             })
                             .expect("quote name cell");
                         assert!(
-                            (100.0..230.0).contains(&name),
+                            (45.0..180.0).contains(&name),
                             "quote cells collapsed: name starts at {name}"
+                        );
+                    }
+                    if mode == 6 && size.x >= 1440.0 {
+                        let label_rect = |label: &str| {
+                            output
+                                .shapes
+                                .iter()
+                                .find_map(|shape| {
+                                    if let egui::Shape::Text(t) = &shape.shape {
+                                        if t.galley.job.text == label
+                                            && t.pos.x > size.x * 0.2 + 10.0
+                                        {
+                                            return Some(t.galley.rect.translate(t.pos.to_vec2()));
+                                        }
+                                    }
+                                    None
+                                })
+                                .unwrap_or_else(|| panic!("detail label missing: {label}"))
+                        };
+                        let open = label_rect("今开");
+                        assert!((open.left()-size.x*0.2-24.0).abs()<2.0,"metrics and stock heading must share the detail pane edge: metric left {} at {:?}",open.left(),size);
+                        for label in ["最高", "最低", "昨收"] {
+                            assert!(
+                                (label_rect(label).top() - open.top()).abs() < 1.0,
+                                "metric labels must align"
+                            );
+                        }
+                        let high = label_rect("最高");
+                        let low = label_rect("最低");
+                        let close = label_rect("昨收");
+                        let step = high.left() - open.left();
+                        assert!(
+                            step > 80.0
+                                && (low.left() - high.left() - step).abs() < 1.0
+                                && (close.left() - low.left() - step).abs() < 1.0,
+                            "metric columns must have equal widths, including long values"
+                        );
+                        let volume = label_rect("成交量");
+                        assert!(
+                            volume.top() == open.top() || (volume.left() - open.left()).abs() < 1.0,
+                            "wrapped metrics must align to the first column"
+                        );
+                        let period = label_rect("分时");
+                        for label in [
+                            "MA5",
+                            "MA10",
+                            "MA20",
+                            "MA30",
+                            "MA120 · 半年",
+                            "MA250 · 年线",
+                        ] {
+                            let bounds = label_rect(label);
+                            assert!(bounds.left()>=size.x*0.2 && bounds.right()<size.x && bounds.top()>period.top(),"MA control {label} must remain aligned inside the chart toolbar at {size:?}: {bounds:?}");
+                        }
+                        let heading = label_rect("贵州茅台");
+                        let last_average = label_rect("MA250 · 年线");
+                        let budget = if size.x >= 1920.0 { 205.0 } else { 245.0 };
+                        assert!(last_average.bottom() - heading.top() <= budget, "stock header wastes chart space at {size:?}: heading {heading:?}, averages {last_average:?}");
+                        let range = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| {
+                                if let egui::Shape::Text(t) = &shape.shape {
+                                    if t.galley.job.text.contains("根 · 原始价格") {
+                                        Some(t.pos.y)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                            .expect("history range in toolbar");
+                        assert!(
+                            (range - period.top()).abs() < 55.0,
+                            "history range must sit inside the toolbar"
+                        );
+                        let refresh = label_rect(
+                            if app.settings_cache["provider"]["configured"]
+                                .as_bool()
+                                .unwrap_or(false)
+                            {
+                                "更新完整历史"
+                            } else {
+                                "配置数据源"
+                            },
+                        );
+                        assert!(
+                            (period.center().y - refresh.center().y).abs() < 3.0,
+                            "period and refresh controls must share a row"
+                        );
+                        assert!(
+                            refresh.right() <= size.x && refresh.top() - open.top() < 220.0,
+                            "chart controls must remain compact and inside the pane"
                         );
                     }
                     for clipped in output.shapes {

@@ -3,14 +3,17 @@
 use eframe::egui::{self, Color32, Margin, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
 mod async_ui;
 mod design;
+mod detail_workspace;
 mod empty_states;
 #[cfg(test)]
 mod interaction_tests;
 #[cfg(test)]
 mod layout_tests;
+mod live_refresh;
 mod management;
 mod market_footer;
 mod market_map;
+mod quote_sidebar;
 mod stock_research;
 mod watch_search;
 use crate::controller::Controller;
@@ -93,6 +96,7 @@ pub struct GetRichApp {
     pulse_tick: Option<Instant>,
     industry: String,
     controller: Controller,
+    live: live_refresh::LiveRefresh,
     settings_cache: Value,
     jobs_cache: Value,
     settings_tick: Option<Instant>,
@@ -267,6 +271,7 @@ impl GetRichApp {
             kline_span: 0,
             kline_end: 0,
             quote_tick: None,
+            live: Default::default(),
             pulse,
             pulse_tick: None,
             industry: String::new(),
@@ -363,11 +368,14 @@ impl eframe::App for GetRichApp {
             self.error = Some(error);
         }
         self.handle_keys(ctx);
+        self.controller.set_repaint(ctx);
         self.apply_io();
+        self.observe_data_changes();
         self.tick_background();
         self.tick_live_quote();
         self.tick_pulse();
         if self.loading
+            || self.market.loading
             || self.detail_loading
             || matches!(self.screen, Screen::Data | Screen::Settings)
         {
@@ -375,12 +383,7 @@ impl eframe::App for GetRichApp {
         } else if self.screen == Screen::Pulse {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         } else if matches!(self.screen, Screen::Quotes | Screen::Detail) {
-            let live = self.core.ingest.in_session() && self.core.ingest.worker_running();
-            let wait = if live {
-                std::time::Duration::from_secs(3)
-            } else {
-                std::time::Duration::from_secs(15)
-            };
+            let wait = Duration::from_millis(500);
             ctx.request_repaint_after(wait);
         }
 
@@ -503,41 +506,10 @@ impl GetRichApp {
     }
 
     fn tick_pulse(&mut self) {
-        if self.screen != Screen::Pulse {
-            return;
-        }
-        let due = self
-            .pulse_tick
-            .map(|t| t.elapsed() >= Duration::from_secs(3))
-            .unwrap_or(true);
-        if !due {
-            return;
-        }
-        self.read_pulse();
-        self.reload_map();
-        self.pulse_tick = Some(Instant::now());
+        self.tick_map_reads();
     }
-
     fn tick_live_quote(&mut self) {
-        if !matches!(self.screen, Screen::Quotes | Screen::Detail) {
-            return;
-        }
-        let worker = self.core.ingest.worker_running();
-        let in_session = self.core.ingest.in_session();
-        let interval = if worker && in_session {
-            Duration::from_secs(3)
-        } else {
-            Duration::from_secs(15)
-        };
-        let due = self
-            .quote_tick
-            .map(|t| t.elapsed() >= interval)
-            .unwrap_or(true);
-        if !due {
-            return;
-        }
-        self.quote_tick = Some(Instant::now());
-        self.refresh_from_db();
+        self.tick_quote_reads();
     }
 
     fn ui_quotes(&mut self, ctx: &egui::Context) {
@@ -564,33 +536,17 @@ impl GetRichApp {
                 });
             return;
         }
-        let panel = egui::SidePanel::left(egui::Id::new((
-            "quote-list",
-            self.preferences.list_width.round() as u32,
-        )))
-        .resizable(true)
-        .show_separator_line(false)
-        .default_width(self.preferences.list_width)
-        .min_width(280.0)
-        .max_width(ctx.screen_rect().width() * 0.6)
-        .frame(
-            egui::Frame::none()
-                .fill(surface())
-                .inner_margin(18.0)
-                .stroke(Stroke::new(1.0_f32, design::border())),
-        )
-        .show(ctx, |ui| self.draw_list(ui));
-        let width = panel.response.rect.width().clamp(280.0, 900.0);
-        if (width - self.preferences.list_width).abs() > 10.0
-            && !ctx.input(|i| i.pointer.any_down())
-        {
-            self.preferences.list_width = width;
-            self.submit_action(
-                "settings",
-                "settings.save",
-                json!({"preferences":{"list_width":width}}),
-            );
-        }
+        egui::SidePanel::left("quote-list")
+            .resizable(false)
+            .show_separator_line(false)
+            .exact_width(ctx.screen_rect().width() * 0.2)
+            .frame(
+                egui::Frame::none()
+                    .fill(surface())
+                    .inner_margin(12.0)
+                    .stroke(Stroke::new(1.0_f32, design::border())),
+            )
+            .show(ctx, |ui| self.draw_list(ui));
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(surface()).inner_margin(24.0))
             .show(ctx, |ui| {
@@ -601,47 +557,26 @@ impl GetRichApp {
     fn draw_list(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("市场行情").size(19.0).strong());
+            ui.label(egui::RichText::new("市场行情").size(17.0).strong());
+            if self.loading {
+                ui.add_sized([14.0, 14.0], egui::Spinner::new().size(14.0));
+            } else {
+                ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.link("大盘星图 ↗").clicked() {
+                if ui
+                    .link(egui::RichText::new("星图 ↗").size(12.0))
+                    .on_hover_text("打开大盘星图")
+                    .clicked()
+                {
                     self.screen = Screen::Pulse;
                     self.reload_map();
                 }
             });
         });
         ui.add_space(12.0);
-        egui::ScrollArea::horizontal()
-            .id_salt("boards")
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (id, label) in BOARDS {
-                        if chip(ui, label, self.board == *id).clicked() {
-                            self.board = (*id).into();
-                            self.industry.clear();
-                            self.change_filter.clear();
-                            self.reload_list();
-                        }
-                    }
-                });
-            });
-        let old_filter = self.change_filter.clone();
-        egui::ComboBox::from_id_salt("change-filter")
-            .selected_text(filter_label(&self.change_filter))
-            .show_ui(ui, |ui| {
-                for (id, label) in [
-                    ("", "全部涨跌"),
-                    ("up", "上涨"),
-                    ("down", "下跌"),
-                    ("flat", "平盘"),
-                    ("limit_up", "涨停估算"),
-                    ("limit_down", "跌停估算"),
-                ] {
-                    ui.selectable_value(&mut self.change_filter, id.into(), label);
-                }
-            });
-        if old_filter != self.change_filter {
-            self.reload_list();
-        }
+        self.quote_filters(ui);
+        ui.add_space(10.0);
         if !self.industry.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!("行业：{}", self.industry));
@@ -650,9 +585,6 @@ impl GetRichApp {
                     self.reload_list();
                 }
             });
-        }
-        if self.loading {
-            ui.label("正在更新…");
         }
         let Some(page) = self.page.clone() else {
             ui.spinner();
@@ -692,23 +624,37 @@ impl GetRichApp {
             .iter()
             .filter_map(|id| ALL_COLS.iter().find(|(key, _, _)| key == id))
             .collect();
-        let base_width: f32 = columns
+        let weights: Vec<f32> = columns
             .iter()
-            .map(|(id, _, _)| if *id == "name" { 130.0 } else { 82.0 })
-            .sum();
-        let table_h = (ui.available_height() - 68.0).max(100.0);
+            .map(|(id, _, _)| match *id {
+                "name" => 1.18,
+                "turnover" => 1.15,
+                "change_pct" => 1.08,
+                _ => 1.0,
+            })
+            .collect();
+        let total_weight: f32 = weights.iter().sum();
+        let gap = 4.0;
+        let available =
+            (ui.available_width() - gap * (columns.len().saturating_sub(1)) as f32).max(1.0);
+        let widths: Vec<f32> = weights
+            .iter()
+            .map(|w| (available * w / total_weight.max(1.0)).max(44.0))
+            .collect();
+        let base_width = widths.iter().sum::<f32>() + gap * columns.len().saturating_sub(1) as f32;
+        // Reserve both the column header and the pagination row outside the
+        // nested scroll areas. Otherwise large lists push the pager off-screen.
+        let table_h = (ui.available_height() - 128.0).max(100.0);
         let mut selected = None;
         let mut sort = None;
         egui::ScrollArea::horizontal()
             .id_salt("quote-columns")
             .show(ui, |ui| {
                 ui.set_min_width(base_width.max(ui.available_width()));
-                let widths: Vec<f32> = columns
-                    .iter()
-                    .map(|(id, _, _)| if *id == "name" { 130.0 } else { 82.0 })
-                    .collect();
+                ui.spacing_mut().item_spacing.x = gap;
+                ui.spacing_mut().button_padding.x = 2.0;
                 ui.horizontal(|ui| {
-                    for (i, (id, label, _)) in columns.iter().enumerate() {
+                    for (i, (id, label, numeric)) in columns.iter().enumerate() {
                         let on =
                             self.sort.trim_end_matches("_asc").trim_end_matches("_desc") == *id;
                         let title = format!(
@@ -724,8 +670,7 @@ impl GetRichApp {
                                 ""
                             }
                         );
-                        if ui
-                            .add_sized([widths[i], 36.0], egui::Button::new(title).frame(false))
+                        if quote_sidebar::table_heading(ui, &title, widths[i], *numeric, on)
                             .clicked()
                         {
                             sort = Some(*id);
@@ -751,7 +696,10 @@ impl GetRichApp {
                                         "last" => fmt(row.last),
                                         "change_pct" => pct(row.change_pct),
                                         "change_amt" => signed(row.change),
-                                        "turnover" => amount(row.turnover, row.currency.as_deref()),
+                                        "turnover" => amount(
+                                            row.turnover,
+                                            row.currency.as_deref().filter(|c| *c != "CNY"),
+                                        ),
                                         "amplitude" => pct(row.amplitude),
                                         _ => String::new(),
                                     };
@@ -762,7 +710,7 @@ impl GetRichApp {
                                     } else {
                                         text_color()
                                     };
-                                    let label = egui::RichText::new(value).color(color).size(13.0);
+                                    let label = egui::RichText::new(&value).color(color).size(12.0);
                                     let (cell, _) = ui.allocate_exact_size(
                                         Vec2::new(widths[i], 36.0),
                                         Sense::hover(),
@@ -777,7 +725,9 @@ impl GetRichApp {
                                                 }),
                                         ),
                                     );
-                                    cell_ui.add(egui::Label::new(label).truncate());
+                                    cell_ui
+                                        .add(egui::Label::new(label).truncate())
+                                        .on_hover_text(&value);
                                 }
                             });
                             let row_rect = response.response.rect;
@@ -819,27 +769,40 @@ impl GetRichApp {
                     });
             });
         ui.separator();
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().button_padding.x = 6.0;
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let compact = ui.available_width() < 240.0;
             if ui
                 .add_enabled(
                     self.page_offset > 0 && !self.loading,
-                    egui::Button::new("上一页"),
+                    egui::Button::new(egui::RichText::new("上一页").size(12.0)),
                 )
                 .clicked()
             {
                 self.page_offset = self.page_offset.saturating_sub(200);
                 self.reload_board(true);
             }
-            ui.small(format!(
+            let range = format!(
                 "{}–{} / {} 只",
                 self.page_offset + 1,
                 self.page_offset + page.count,
                 page.matched
-            ));
+            );
+            ui.small(if compact {
+                format!(
+                    "{}/{}",
+                    self.page_offset / 200 + 1,
+                    page.matched.div_ceil(200)
+                )
+            } else {
+                range.clone()
+            })
+            .on_hover_text(range);
             if ui
                 .add_enabled(
                     self.page_offset + page.count < page.matched && !self.loading,
-                    egui::Button::new("下一页"),
+                    egui::Button::new(egui::RichText::new("下一页").size(12.0)),
                 )
                 .clicked()
             {
@@ -874,55 +837,13 @@ impl GetRichApp {
             self.detail_placeholder(ui);
             return;
         }
-        ui.spacing_mut().item_spacing.y = 6.0;
-        let mut watch_clicked = false;
+        ui.spacing_mut().item_spacing.y = 3.0;
+        let watch_clicked = self.stock_heading(ui);
         let mut pull_bars = false;
-        let mut new_tf: Option<Timeframe> = None;
-        {
-            let detail = self.detail.as_ref().unwrap();
-            let q = &detail.quote;
-            let dir = dir_color(&q.direction);
-            let name = q.name.clone().unwrap_or_else(|| q.symbol.clone());
-            let ccy = q.currency.clone().unwrap_or_default();
-            let last = if detail.empty.no_quote {
-                "暂无报价".into()
-            } else {
-                fmt(q.last)
-            };
-            let chg_line = format!("{}  {}", signed(q.change), pct(q.change_pct));
-            let star = if detail.watched {
-                "★ 自选"
-            } else {
-                "☆ 自选"
-            };
-            let board_label = q.board_label.clone();
-            let symbol = q.symbol.clone();
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(name).size(27.0).strong());
-                    ui.label(
-                        egui::RichText::new(format!("{symbol}  ·  {board_label}  {ccy}"))
-                            .color(muted())
-                            .size(13.0),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(star).clicked() {
-                        watch_clicked = true;
-                    }
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(last).size(29.0).strong().color(dir));
-                        ui.label(egui::RichText::new(chg_line).size(14.0).color(dir));
-                    });
-                });
-            });
-        }
-        ui.add_space(12.0);
         if let Some(detail) = &self.detail {
             draw_quote_summary(ui, detail);
         }
-        ui.add_space(6.0);
-        self.stock_tabs(ui);
+        let new_tf = self.chart_toolbar(ui);
         if self.stock.tab != 0 {
             self.research_panel(ui);
             if watch_clicked {
@@ -930,31 +851,6 @@ impl GetRichApp {
             }
             return;
         }
-        ui.horizontal_wrapped(|ui| {
-            if chip(ui, "分时", self.stock.intraday).clicked() {
-                self.stock.intraday = true;
-            }
-            for (tf, label) in [
-                (Timeframe::D1, "日K"),
-                (Timeframe::W1, "周K"),
-                (Timeframe::Mo1, "月K"),
-            ] {
-                if chip(ui, label, !self.stock.intraday && self.tf == tf).clicked() {
-                    self.stock.intraday = false;
-                    new_tf = Some(tf);
-                }
-            }
-            if !self.stock.intraday {
-                ui.label(egui::RichText::new("MA5").size(11.0).color(muted()));
-                ui.label(egui::RichText::new("MA10").size(11.0).color(accent()));
-                ui.label(
-                    egui::RichText::new("MA20")
-                        .size(11.0)
-                        .color(Color32::from_rgb(191, 72, 0)),
-                );
-            }
-        });
-        ui.add_space(8.0);
         if self.stock.intraday {
             self.intraday_chart(ui);
             if watch_clicked {
@@ -962,54 +858,8 @@ impl GetRichApp {
             }
             return;
         }
-        self.research_status(ui, "history");
-        self.dataset_note(ui, "history");
-        if let Some(b) = &self.bars {
-            ui.small(format!(
-                "{} — {}  ·  {} 根  ·  原始价格 / 未复权",
-                b.from.as_deref().unwrap_or("—"),
-                b.to.as_deref().unwrap_or("—"),
-                b.count
-            ));
-        }
-        let bars_empty = self.bars.as_ref().map(|b| b.empty).unwrap_or(true);
-        if let Some(bars) = self.bars.as_ref().filter(|b| !b.empty) {
-            if bars.partial_last_period {
-                ui.small("最新周/月周期仍在进行，按已导入日线合成。以行情日期为准。");
-            }
-            ui.horizontal(|ui| {
-                for (action, label) in [
-                    ("left", "←"),
-                    ("right", "→"),
-                    ("in", "＋"),
-                    ("out", "－"),
-                    ("reset", "回到最新"),
-                ] {
-                    if ui.button(label).clicked() {
-                        let (_, end, span) = crate::chart_model::viewport(
-                            bars.rows.len(),
-                            self.kline_span,
-                            self.kline_end,
-                        );
-                        match action {
-                            "left" => {
-                                self.kline_end = end.saturating_sub((span / 2).max(1)).max(span)
-                            }
-                            "right" => {
-                                let next = (end + span / 2).min(bars.rows.len());
-                                self.kline_end = if next == bars.rows.len() { 0 } else { next };
-                            }
-                            "in" => self.kline_span = (span * 4 / 5).max(1),
-                            "out" => self.kline_span = (span * 5 / 4 + 1).min(bars.rows.len()),
-                            _ => {
-                                self.kline_span = 0;
-                                self.kline_end = 0;
-                            }
-                        }
-                    }
-                }
-            });
-        }
+        self.chart_notice(ui);
+        let bars_empty = self.bars.as_ref().is_none_or(|b| b.empty);
         let empty_msg = self.bars.as_ref().map(|b| b.empty_message.clone());
         if bars_empty {
             egui::Frame::none()
@@ -1041,7 +891,7 @@ impl GetRichApp {
                     });
                 });
         } else if let Some(bars) = self.bars.as_ref() {
-            let h = (ui.available_height() - 90.0).clamp(260.0, 480.0);
+            let h = (ui.available_height() - 64.0).clamp(260.0, 900.0);
             let mut span = self.kline_span;
             let mut hover = self.kline_hover;
             egui::Frame::none()
@@ -1049,10 +899,21 @@ impl GetRichApp {
                 .rounding(Rounding::same(16.0))
                 .show(ui, |ui| {
                     ui.allocate_ui(Vec2::new(ui.available_width(), h), |ui| {
-                        hover = draw_kline(ui, &bars.rows, &mut span, &mut self.kline_end, hover);
+                        hover = draw_kline(
+                            ui,
+                            &bars.rows,
+                            &bars.moving_averages,
+                            &self.preferences.moving_averages,
+                            &mut span,
+                            &mut self.kline_end,
+                            hover,
+                        );
                     });
                 });
             self.kline_span = span;
+            if self.kline_hover != hover {
+                ui.ctx().request_repaint();
+            }
             self.kline_hover = hover;
         }
         ui.add_space(14.0);
@@ -1222,31 +1083,18 @@ fn shanghai_ts(value: &str) -> String {
         .unwrap_or_else(|_| value.replace('T', " ").chars().take(19).collect())
 }
 
-fn sma(values: &[f64], n: usize) -> Vec<Option<f64>> {
-    let mut out = vec![None; values.len()];
-    let mut sum = 0.0;
-    for i in 0..values.len() {
-        sum += values[i];
-        if i >= n {
-            sum -= values[i - n];
-        }
-        if i + 1 >= n {
-            out[i] = Some(sum / n as f64);
-        }
-    }
-    out
-}
-
 fn draw_kline(
     ui: &mut egui::Ui,
     rows: &[getrich_core::models::Bar],
+    averages: &[getrich_core::indicators::MovingAverage],
+    enabled: &[usize],
     span: &mut usize,
     end: &mut usize,
     hover: Option<usize>,
 ) -> Option<usize> {
     let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::hover());
     let rect = Rect::from_min_max(
-        resp.rect.min + Vec2::new(66.0, 34.0),
+        resp.rect.min + Vec2::new(66.0, 8.0),
         resp.rect.max - Vec2::new(18.0, 30.0),
     );
     if rows.is_empty() || rect.width() < 10.0 {
@@ -1272,16 +1120,15 @@ fn draw_kline(
                 i.smooth_scroll_delta.y = 0.0;
             });
             if (zoom - 1.0).abs() > 0.001 {
-                let next = (*span as f32 / zoom).round() as usize;
-                *span = next.clamp(8.min(n), n);
+                *span = crate::chart_model::zoom_span(*span, 1.0 / zoom, n);
                 ui.ctx().request_repaint();
             } else if scroll.abs() > 0.1 {
                 if scroll > 0.0 {
-                    *span = ((*span as f32) * 0.8).round() as usize;
+                    *span = crate::chart_model::zoom_span(*span, 0.8, n);
                 } else {
-                    *span = ((*span as f32) * 1.25).round() as usize;
+                    *span = crate::chart_model::zoom_span(*span, 1.25, n);
                 }
-                *span = (*span).clamp(8.min(n), n);
+                *span = (*span).clamp(1, n);
                 ui.ctx().request_repaint();
             }
         }
@@ -1289,15 +1136,19 @@ fn draw_kline(
 
     let (start, finish, vis) = crate::chart_model::viewport(n, *span, *end);
     *span = vis;
-    let all_rows = rows;
     let rows = &rows[start..finish];
-    let closes: Vec<f64> = all_rows.iter().map(|b| b.close).collect();
-    let ma5 = sma(&closes, 5)[start..finish].to_vec();
-    let ma10 = sma(&closes, 10)[start..finish].to_vec();
-    let ma20 = sma(&closes, 20)[start..finish].to_vec();
+    let visible_ma: Vec<_> = averages
+        .iter()
+        .filter(|ma| enabled.contains(&ma.period))
+        .filter_map(|ma| {
+            ma.values
+                .get(start..finish)
+                .map(|values| (ma.period, values))
+        })
+        .collect();
     let mut min = rows.iter().map(|b| b.low).fold(f64::MAX, f64::min);
     let mut max = rows.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-    for arr in [&ma5, &ma10, &ma20] {
+    for (_, arr) in &visible_ma {
         for v in arr.iter().flatten() {
             min = min.min(*v);
             max = max.max(*v);
@@ -1315,9 +1166,8 @@ fn draw_kline(
     let vols: Vec<f64> = rows.iter().map(|b| b.volume.unwrap_or(0.0)).collect();
     let vmax = vols.iter().copied().fold(1.0_f64, f64::max);
     let vis_n = rows.len();
-    let slots = vis_n.max(80) as f32;
-    let slot = plot.width() / slots;
-    let pad = slots - vis_n as f32;
+    let slot = crate::chart_model::slot_width(plot.width(), vis_n);
+    let pad = 0.0;
     let y = |p: f64| {
         let t = (max - p) / (max - min);
         plot.top() + t as f32 * plot.height()
@@ -1380,7 +1230,7 @@ fn draw_kline(
         );
         let top = y(b.open.max(b.close));
         let bot = y(b.open.min(b.close));
-        let w = (slot * 0.62).clamp(1.0, 8.0);
+        let w = crate::chart_model::candle_width(slot);
         painter.rect_filled(
             Rect::from_min_max(
                 Pos2::new(x - w / 2.0, top),
@@ -1413,24 +1263,14 @@ fn draw_kline(
             prev = Some(p);
         }
     };
-    stroke_ma(&ma5, muted());
-    stroke_ma(&ma10, accent());
-    stroke_ma(&ma20, Color32::from_rgb(191, 72, 0));
-    if let Some(cur) = rows.get(hi) {
+    for (period, values) in visible_ma {
+        stroke_ma(values, detail_workspace::ma_color(period));
+    }
+    if rows.get(hi).is_some() {
         let x = x_at(hi);
         painter.line_segment(
             [Pos2::new(x, plot.top()), Pos2::new(x, rect.bottom())],
             Stroke::new(1.0_f32, muted().gamma_multiply(0.65)),
-        );
-        painter.text(
-            Pos2::new(plot.left(), resp.rect.top() + 5.0),
-            egui::Align2::LEFT_TOP,
-            format!(
-                "{}  开 {:.2}  高 {:.2}  低 {:.2}  收 {:.2}",
-                cur.ts, cur.open, cur.high, cur.low, cur.close
-            ),
-            egui::FontId::proportional(12.0),
-            muted(),
         );
     }
     hover.or(Some(hi))

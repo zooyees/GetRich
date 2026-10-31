@@ -9,7 +9,7 @@ members = [
 default-members = ["crates/getrich-cli", "crates/getrich-api", "crates/getrich-gui"]
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.11"
 edition = "2021"
 license = "MIT"
 authors = ["Yu Zhao"]

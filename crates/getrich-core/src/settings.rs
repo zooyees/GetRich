@@ -145,11 +145,13 @@ impl App {
 
     pub fn settings_view(&self) -> Result<Value, AppError> {
         let cfg = self.read_settings_config()?;
+        let conn = self.db.connect()?;
+        let (responses,history,ranges):(u64,u64,u64)=conn.query_row("SELECT (SELECT count(*) FROM provider_cache),(SELECT count(*) FROM provider_history),(SELECT count(*) FROM provider_coverage)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(crate::db::DbError::from)?;
         Ok(
             json!({"default_board":cfg.universe.default_board,"watchlist":cfg.universe.watchlist,
             "provider":self.tushare_status(),"preferences":cfg.preferences,
             "config_path":self.config_path,"data_root":self.config_path.parent(),"db_path":self.db.path,
-            "storage_change_requires_restart":true}),
+            "storage_change_requires_restart":true,"local_storage":{"schema_version":crate::db::schema_version(),"cached_responses":responses,"history_rows":history,"covered_ranges":ranges,"policy":"历史只补缺口；实时行情持续更新；成功响应自动落盘"}}),
         )
     }
 
@@ -221,6 +223,16 @@ impl App {
                     }
                 }
                 cfg.preferences.recent.truncate(30);
+                if cfg
+                    .preferences
+                    .moving_averages
+                    .iter()
+                    .any(|p| !crate::indicators::MA_PERIODS.contains(p))
+                {
+                    return Err(AppError::InvalidArg("不支持的日均线周期".into()));
+                }
+                cfg.preferences.moving_averages.sort_unstable();
+                cfg.preferences.moving_averages.dedup();
             }
             Ok(())
         })?;

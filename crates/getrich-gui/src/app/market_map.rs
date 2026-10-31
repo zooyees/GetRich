@@ -1,10 +1,15 @@
 use super::*;
+mod canvas;
+#[cfg(test)]
+mod canvas_tests;
 use getrich_core::market_map::{Bounds, MapQuery, MapTile, MarketMap};
 
 pub(super) struct MapState {
+    canvas_cache: Option<canvas::CanvasCache>,
     pub query: MapQuery,
     pub data: Option<Arc<MarketMap>>,
     pub loading: bool,
+    pub(super) request_query: Option<MapQuery>,
     pub error: Option<String>,
     search: String,
     highlight_watch: bool,
@@ -26,9 +31,14 @@ pub(super) struct MapState {
 impl Default for MapState {
     fn default() -> Self {
         Self {
-            query: MapQuery::default(),
+            canvas_cache: None,
+            query: MapQuery {
+                weight_policy: "latest_available".into(),
+                ..Default::default()
+            },
             data: None,
             loading: false,
+            request_query: None,
             error: None,
             search: String::new(),
             highlight_watch: false,
@@ -56,14 +66,52 @@ impl GetRichApp {
         }
         self.market.loading = true;
         let query = self.market.query.clone();
+        self.market.request_query = Some(query.clone());
         if let Err(error) = self.controller.submit("read:map", move |core| {
             core.market_map(query)
                 .map(|v| crate::controller::Payload::Map(Box::new(v)))
                 .map_err(|e| e.to_string())
         }) {
             self.market.loading = false;
+            self.market.request_query = None;
             self.market.error = Some(error);
         }
+    }
+    pub(super) fn accept_map(&mut self, map: MarketMap) {
+        self.market.loading = false;
+        self.market.request_query = None;
+        if map.query == self.market.query {
+            self.market.error = None;
+            self.market.data = Some(Arc::new(map));
+        } else {
+            // A filter or resize changed while the one allowed request was running.
+            self.reload_map();
+        }
+    }
+    pub(super) fn fail_map(&mut self, error: String) {
+        let obsolete = self
+            .market
+            .request_query
+            .as_ref()
+            .is_some_and(|q| q != &self.market.query);
+        self.market.request_query = None;
+        self.market.loading = false;
+        if obsolete {
+            self.reload_map();
+        } else {
+            self.market.error = Some(error);
+        }
+    }
+    fn map_scope_current(&self) -> bool {
+        self.market.data.as_ref().is_none_or(|d| {
+            let a = &d.query;
+            let b = &self.market.query;
+            a.board == b.board
+                && a.metric == b.metric
+                && a.industry == b.industry
+                && a.watch_only == b.watch_only
+                && a.weight_policy == b.weight_policy
+        })
     }
     pub(super) fn ui_pulse(&mut self, ctx: &egui::Context) {
         let mut refresh = false;
@@ -84,7 +132,7 @@ impl GetRichApp {
                     Sense::click_and_drag(),
                 );
                 self.market.canvas_rect = Some(rect);
-                let aspect = f64::from(rect.width() / rect.height());
+                let aspect = f64::from(rect.width() / rect.height()).clamp(0.25, 5.0);
                 if (aspect - self.market.query.aspect).abs() > 0.12 {
                     self.market.query.aspect = aspect;
                     self.market.resize_at = Some(Instant::now());
@@ -100,7 +148,7 @@ impl GetRichApp {
                 if response.clicked() {
                     response.request_focus();
                 }
-                if response.has_focus() {
+                if response.has_focus() && self.map_scope_current() {
                     let delta = ui.input(|i| {
                         if i.key_pressed(egui::Key::ArrowRight)
                             || i.key_pressed(egui::Key::ArrowDown)
@@ -168,141 +216,87 @@ impl GetRichApp {
                 painter.rect_filled(rect, 4.0, Color32::from_rgb(14, 21, 33));
                 let mut hovered: Option<&MapTile> = None;
                 let mut clicked_industry = None;
-                let pointer = response.hover_pos();
+                let pointer = if self.map_scope_current() {
+                    response.hover_pos()
+                } else {
+                    None
+                };
                 if let Some(d) = &data {
-                    for group in &d.groups {
-                        let g = project(rect, group.bounds, self.market.zoom, self.market.pan);
-                        if !g.intersects(rect) {
-                            continue;
+                    let green = self.preferences.colors == "green_up";
+                    let scale = ui.ctx().pixels_per_point();
+                    if self.market.canvas_cache.as_ref().is_none_or(|c| {
+                        !c.matches(
+                            d,
+                            rect,
+                            self.market.zoom,
+                            self.market.pan,
+                            &search,
+                            self.market.highlight_watch,
+                            green,
+                            scale,
+                        )
+                    }) {
+                        self.market.canvas_cache = Some(canvas::CanvasCache::new(
+                            Arc::clone(d),
+                            &painter,
+                            rect,
+                            self.market.zoom,
+                            self.market.pan,
+                            &search,
+                            self.market.highlight_watch,
+                            green,
+                        ));
+                    }
+                    let cache = self.market.canvas_cache.as_ref().unwrap();
+                    cache.draw(&painter);
+                    for (r, gi, ti) in &cache.tiles {
+                        let tile = &d.groups[*gi].tiles[*ti];
+                        let hover = pointer.is_some_and(|p| r.contains(p));
+                        if hover {
+                            hovered = Some(tile);
                         }
-                        let header = if g.width() > 55.0 && g.height() > 45.0 {
-                            24.0
-                        } else {
-                            0.0
-                        };
-                        if header > 0.0 {
-                            let head = Rect::from_min_size(g.min, Vec2::new(g.width(), header));
-                            painter.rect_filled(
-                                head.shrink(0.5),
+                        let selected = self.market.selected.as_deref() == Some(tile.key.as_str());
+                        if selected || hover {
+                            painter.rect_stroke(
+                                r.shrink(1.0),
                                 0.0,
-                                Color32::from_rgb(29, 40, 56),
+                                Stroke::new(
+                                    if selected { 2.5_f32 } else { 1.5_f32 },
+                                    if selected {
+                                        Color32::from_rgb(255, 215, 130)
+                                    } else {
+                                        Color32::WHITE
+                                    },
+                                ),
                             );
-                            let clipped = painter.with_clip_rect(head.intersect(rect).shrink(4.0));
-                            clipped.text(
-                                head.left_center() + Vec2::new(7.0, 0.0),
-                                egui::Align2::LEFT_CENTER,
-                                &group.name,
-                                egui::FontId::proportional(11.0),
-                                Color32::from_rgb(220, 231, 247),
-                            );
-                            if head.width() > 170.0 {
-                                clipped.text(
-                                    head.right_center() - Vec2::new(7.0, 0.0),
-                                    egui::Align2::RIGHT_CENTER,
-                                    pct(group.mean_pct),
-                                    egui::FontId::proportional(10.0),
-                                    map_pct_color(
-                                        group.mean_pct,
-                                        self.preferences.colors == "green_up",
-                                    ),
-                                );
-                            }
-                            if pointer.is_some_and(|p| head.contains(p)) && response.clicked() {
-                                clicked_industry = Some(group.name.clone());
-                            }
-                        }
-                        let body = Rect::from_min_max(
-                            g.min + Vec2::new(1.0, header + 1.0),
-                            g.max - Vec2::splat(1.0),
-                        );
-                        for tile in &group.tiles {
-                            let r = project(body, tile.bounds, 1.0, Vec2::ZERO);
-                            if r.width() < 0.3 || r.height() < 0.3 || !r.intersects(rect) {
-                                continue;
-                            }
-                            let highlighted = if !search.is_empty() {
-                                map_matches(tile, &search)
-                            } else {
-                                !self.market.highlight_watch || tile.watched
-                            };
-                            let rgb = getrich_core::market_map::tile_rgb(
-                                tile.quote.change_pct,
-                                self.preferences.colors == "green_up",
-                            );
-                            let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                            painter.rect_filled(
-                                r.shrink(0.5),
-                                0.0,
-                                if highlighted {
-                                    color
-                                } else {
-                                    color.gamma_multiply(0.24)
-                                },
-                            );
-                            let hover = pointer.is_some_and(|p| r.contains(p));
-                            if hover {
-                                hovered = Some(tile);
-                            }
-                            let selected =
-                                self.market.selected.as_deref() == Some(tile.key.as_str());
-                            if selected
-                                || hover
-                                || ((!search.is_empty() || self.market.highlight_watch)
-                                    && highlighted)
-                            {
-                                painter.rect_stroke(
-                                    r.shrink(1.0),
-                                    0.0,
-                                    Stroke::new(
-                                        if selected { 2.5_f32 } else { 1.5_f32 },
-                                        if selected {
-                                            Color32::from_rgb(255, 215, 130)
-                                        } else if hover {
-                                            Color32::WHITE
-                                        } else {
-                                            Color32::from_rgb(144, 185, 255)
-                                        },
-                                    ),
-                                );
-                            }
-                            if r.width() < 36.0 || r.height() < 23.0 {
-                                continue;
-                            }
-                            let clipped = painter.with_clip_rect(r.intersect(rect).shrink(3.0));
-                            let size = (r.width() / 6.0).min(r.height() / 3.8).clamp(10.0, 19.0);
-                            let lines = r.height() > 42.0;
-                            let color = if highlighted {
-                                Color32::WHITE
-                            } else {
-                                Color32::from_gray(125)
-                            };
-                            clipped.text(
-                                r.center() - Vec2::new(0.0, if lines { size * 0.65 } else { 0.0 }),
-                                egui::Align2::CENTER_CENTER,
-                                tile.quote.name.as_deref().unwrap_or(&tile.quote.symbol),
-                                egui::FontId::proportional(size),
-                                color,
-                            );
-                            if lines {
-                                clipped.text(
-                                    r.center() + Vec2::new(0.0, size * 0.7),
-                                    egui::Align2::CENTER_CENTER,
-                                    pct(tile.quote.change_pct),
-                                    egui::FontId::proportional((size - 1.0).max(10.0)),
-                                    color,
-                                );
-                            }
-                            if tile.watched && r.width() > 70.0 && r.height() > 65.0 {
-                                clipped.text(
-                                    r.min + Vec2::new(6.0, 4.0),
-                                    egui::Align2::LEFT_TOP,
-                                    "★",
-                                    egui::FontId::proportional(11.0),
-                                    Color32::from_rgb(255, 226, 168),
-                                );
-                            }
                         }
                     }
+                    if response.clicked() {
+                        clicked_industry = cache
+                            .headers
+                            .iter()
+                            .find(|(r, _)| pointer.is_some_and(|p| r.contains(p)))
+                            .map(|(_, gi)| d.groups[*gi].name.clone());
+                    }
+                }
+                if !self.map_scope_current() {
+                    let message = if self.market.error.is_some() {
+                        "筛选读取失败 · 保留上一截面，请重试"
+                    } else {
+                        "正在切换筛选 · 保留上一截面"
+                    };
+                    let banner = Rect::from_center_size(
+                        rect.center_top() + Vec2::new(0.0, 20.0),
+                        Vec2::new(340.0_f32.min(rect.width()), 30.0),
+                    );
+                    painter.rect_filled(banner, 5.0, selected_surface());
+                    painter.text(
+                        banner.center(),
+                        egui::Align2::CENTER_CENTER,
+                        message,
+                        egui::FontId::proportional(12.0),
+                        text_color(),
+                    );
                 }
                 if let Some(tile) = hovered {
                     response.clone().on_hover_ui_at_pointer(|ui| {
@@ -344,7 +338,7 @@ impl GetRichApp {
                     let title = if self.market.loading || self.map_syncing() {
                         "正在读取市场截面…"
                     } else if data.as_ref().is_some_and(|d| d.coverage.missing_weight > 0) {
-                        "当前指标缺少同日权重"
+                        "当前日期策略下缺少市值权重"
                     } else {
                         "当前范围暂无有效报价"
                     };
@@ -361,7 +355,7 @@ impl GetRichApp {
                         if self.map_syncing() {
                             "正在同步行情，完成后自动绘制星图"
                         } else if data.as_ref().is_some_and(|d| d.coverage.missing_weight > 0) {
-                            "当前指标缺少同日权重，请切换自动权重或等面积，或刷新行情获取市值"
+                            "当前日期策略下缺少市值权重，请切换最近有效收盘市值、自动权重或等面积"
                         } else if self.settings_cache["provider"]["configured"]
                             .as_bool()
                             .unwrap_or(false)
@@ -456,7 +450,7 @@ impl GetRichApp {
                 });
             self.market.sync_details_open = open;
         }
-        if refresh && !self.market.loading {
+        if refresh {
             self.market.zoom = 1.0;
             self.market.pan = Vec2::ZERO;
             self.reload_map();
@@ -541,9 +535,12 @@ impl GetRichApp {
                     self.market.inspector_open = !self.market.inspector_open;
                 }
             }
-            if !self.market.query.industry.is_empty() && ui.button("全部行业").clicked() {
-                self.market.query.industry.clear();
-                changed = true;
+            if !self.market.query.industry.is_empty() {
+                ui.colored_label(accent(), format!("行业 · {}", self.market.query.industry));
+                if ui.button("← 全部行业").clicked() {
+                    self.market.query.industry.clear();
+                    changed = true;
+                }
             }
             if ui
                 .button("重置")
@@ -591,7 +588,6 @@ impl GetRichApp {
         });
         if changed {
             self.market.selected = None;
-            self.market.data = None;
             self.market.error = None;
         }
         changed
@@ -813,6 +809,28 @@ impl GetRichApp {
                 }
             });
         changed |= old != self.market.query.metric;
+        ui.small("市值日期策略");
+        let policy = self.market.query.weight_policy.clone();
+        egui::ComboBox::from_id_salt("map-weight-policy")
+            .width(225.0)
+            .selected_text(if policy == "same_day" {
+                "严格同日市值"
+            } else {
+                "最近有效收盘市值（标注日期）"
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut self.market.query.weight_policy,
+                    "latest_available".into(),
+                    "最近有效收盘市值（最多 7 天）",
+                );
+                ui.selectable_value(
+                    &mut self.market.query.weight_policy,
+                    "same_day".into(),
+                    "严格同日市值",
+                );
+            });
+        changed |= policy != self.market.query.weight_policy;
         ui.colored_label(
             muted(),
             egui::RichText::new("颜色 · 涨跌幅 / ±5% 饱和").size(10.0),
@@ -863,6 +881,7 @@ impl GetRichApp {
                 ("其他日期", c.other_date),
                 ("无效 / 币种不符", c.invalid),
                 ("缺少面积权重", c.missing_weight),
+                ("使用较早收盘市值", c.lagged_weight),
                 ("盘中延迟", c.delayed),
                 ("未分类", c.unclassified),
             ] {
@@ -885,7 +904,6 @@ impl GetRichApp {
         }
         if changed {
             self.market.selected = None;
-            self.market.data = None;
             self.market.error = None;
         }
         changed
@@ -968,7 +986,6 @@ impl GetRichApp {
             if ui.button("聚焦所属行业").clicked() {
                 self.market.query.industry = tile.industry.clone();
                 self.market.selected = None;
-                self.market.data = None;
                 self.reload_map();
             }
         } else {

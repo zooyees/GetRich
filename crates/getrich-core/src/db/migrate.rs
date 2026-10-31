@@ -5,6 +5,7 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 const MIGRATIONS: &[(i64, &str, &str)] = &[
+    // Append migrations below in version order.
     (1, "001_init", include_str!("../../migrations/001_init.sql")),
     (
         2,
@@ -30,6 +31,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         6,
         "006_stock_research",
         include_str!("../../migrations/006_stock_research.sql"),
+    ),
+    (
+        7,
+        "007_provider_cache",
+        include_str!("../../migrations/007_provider_cache.sql"),
     ),
 ];
 

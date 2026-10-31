@@ -13,7 +13,10 @@ pub(crate) fn execute(app: &App, id: i64, provider: &dyn DataProvider) -> Result
         ));
     }
     stage(app, id, "获取最新可用交易日行情", 25)?;
-    let mut quotes = provider.snapshot()?;
+    let snapshot = provider.market_snapshot()?;
+    let live = snapshot.live;
+    let mut warnings = snapshot.warnings;
+    let mut quotes = snapshot.bundle;
     if quotes.quotes.is_empty() {
         return Err(AppError::Message(
             "行情接口未返回有效报价；连接测试成功不代表行情接口可用，请检查 daily 接口权限".into(),
@@ -26,6 +29,7 @@ pub(crate) fn execute(app: &App, id: i64, provider: &dyn DataProvider) -> Result
         .max()
         .ok_or_else(|| AppError::Message("行情未返回有效交易日期".into()))?;
     let source_date = session::yyyymmdd(date);
+
     quotes.listings = listings.listings;
     stage(app, id, "保存行情与行业数据", 40)?;
     let quote_report = app.import_bundle(&quotes, provider.id())?;
@@ -35,21 +39,45 @@ pub(crate) fn execute(app: &App, id: i64, provider: &dyn DataProvider) -> Result
             "报价未通过校验，星图暂无有效数据；请查看导入异常记录".into(),
         ));
     }
-    let mut warnings = Vec::<String>::new();
+
     if quote_report.status == "partial" {
         warnings.push("部分行情记录未通过校验，请查看导入异常记录".into());
     }
     let mut datasets = json!({"quotes":quote_report});
     for (name, label, progress) in [
-        ("valuations", "同日流通市值", 55),
-        ("indices", "同日指数日线", 78),
+        (
+            "valuations",
+            if live {
+                "最近已发布收盘市值"
+            } else {
+                "同日流通市值"
+            },
+            55,
+        ),
+        (
+            "indices",
+            if live {
+                "最近已发布指数收盘"
+            } else {
+                "同日指数日线"
+            },
+            78,
+        ),
     ] {
         stage(app, id, &format!("获取{label}"), progress)?;
         let outcome = (|| {
             let bundle = if name == "valuations" {
-                provider.valuations_at(&source_date)?
+                if live {
+                    provider.valuations()?
+                } else {
+                    provider.valuations_at(&source_date)?
+                }
             } else {
-                provider.indices_at(&source_date)?
+                if live {
+                    provider.indices()?
+                } else {
+                    provider.indices_at(&source_date)?
+                }
             };
             if (name == "valuations" && bundle.listings.is_empty())
                 || (name == "indices" && bundle.quotes.is_empty())
@@ -74,8 +102,11 @@ pub(crate) fn execute(app: &App, id: i64, provider: &dyn DataProvider) -> Result
         }
     }
     stage(app, id, "更新星图截面", 96)?;
-    let map = app.market_map(Default::default())?;
+    let map = app.market_map(crate::market_map::MapQuery {
+        weight_policy: "latest_available".into(),
+        ..Default::default()
+    })?;
     Ok(
-        json!({"status":if warnings.is_empty(){"succeeded"}else{"partial"},"trade_date":date.to_string(),"displayed":map.coverage.displayed,"metric":map.metric,"datasets":datasets,"warnings":warnings,"message":format!("已更新 {} 只同日有效股票",map.coverage.quoted)}),
+        json!({"status":if warnings.is_empty(){"succeeded"}else{"partial"},"trade_date":date.to_string(),"quote_mode":if live{"realtime"}else{"daily"},"displayed":map.coverage.displayed,"metric":map.metric,"datasets":datasets,"warnings":warnings,"message":format!("{} · 已更新 {} 只同日有效股票",if live{"实时快照"}else{"收盘行情"},map.coverage.quoted)}),
     )
 }

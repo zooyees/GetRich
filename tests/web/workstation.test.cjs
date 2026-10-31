@@ -6,7 +6,7 @@ const vm=require('node:vm');
 const root=path.resolve(__dirname,'../../crates/getrich-api/web');
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 async function fixture(){
-  const nodes=new Map(),timers=new Map();let timer=0;
+  const nodes=new Map(),timers=new Map(),intervals=[];let timer=0;
   class Element{
     constructor(){this.hidden=false;this.textContent='';this.innerHTML='';this.value='';this.checked=false;this.disabled=false;this.dataset={};this.rows=[];this.cells=[];this.clientWidth=0;this.clientHeight=0;this.attrs={};this.classList={toggle(){},add(){},remove(){}};}
     getContext(){return {};}
@@ -18,23 +18,26 @@ async function fixture(){
   const stats={listings:1,quotes:1,bars:1,empty:false};
   const settings={default_board:'CN',preferences:{theme:'light',columns:['symbol','name','last'],recent:[]},provider:{configured:false},watchlist:[]};
   const fetch=async (url,options={})=>{
+    (model.urls||=[]).push(url);
+    if(url.includes('/bars?')&&model.barWait)return model.barWait.promise;
     let data;if(url.startsWith('/v1/events'))return {ok:true,body:{getReader:()=>({read:async()=>({done:true})})}};
     if(url.startsWith('/v1/quotes')){if(model.searchWait&&new URL('http://local'+url).searchParams.get('q')==='old')return model.searchWait.promise;data={rows:model.rows,matched:model.rows.length,stats,empty:!model.rows.length,empty_kind:'no_match',empty_message:'无匹配'};}
     else if(url.startsWith('/v1/settings'))data=settings;
     else if(url.startsWith('/v1/stocks/')){
       if(model.stockWait)return model.stockWait.promise;
       const parts=url.split('/');const market=decodeURIComponent(parts[3]),symbol=decodeURIComponent(parts[4]);
-      data=url.includes('/bars?')?{rows:[],empty_message:'暂无'}:{quote:model.rows.find(r=>r.symbol===symbol&&r.market===market)||{symbol,market},listing:{},metadata:[],empty:{no_quote:false},watched:true};
+      data=url.includes('/bars?')?(model.bars||{rows:[],empty_message:'暂无'}):{quote:model.rows.find(r=>r.symbol===symbol&&r.market===market)||{symbol,market},listing:{},metadata:[],empty:{no_quote:false},watched:true};
     }else if(url.startsWith('/v2/pulse')){if(model.pulseWait)return model.pulseWait.promise;data={quality:{},pulse:{}};}
     else if(url.startsWith('/v1/jobs'))data={jobs:[]};
     else if(url.startsWith('/v1/runs'))data={runs:[]};
+    else if(url.startsWith('/v1/tushare'))data=model.provider||settings.provider;
     else if(url.startsWith('/v1/health'))data={version:'test',instance_id:'fixture'};
     else if(url.startsWith('/v1/invoke')){const p=JSON.parse(options.body||'{}');model.requests.push(p);data=p.method==='stock.research'?model.research:p.method==='job.submit'||p.method==='job.get'?model.job:{watched:false};}
     else data={};
     return {ok:true,json:async()=>({ok:true,data})};
   };
   const context=vm.createContext({console,document,window:{addEventListener(){}},location:{hash:'#/quotes?board=CN'},fetch,URLSearchParams,URL,AbortController,TextDecoder,Intl,Date,Blob,
-    setTimeout(fn,delay){timers.set(++timer,{fn,delay});return timer;},clearTimeout(id){timers.delete(id);},setInterval(){},ResizeObserver:class{observe(){}},getComputedStyle(){return {getPropertyValue:()=>''};}});
+    setTimeout(fn,delay){timers.set(++timer,{fn,delay});return timer;},clearTimeout(id){timers.delete(id);},setInterval(fn,delay){intervals.push({fn,delay});},ResizeObserver:class{observe(){}},getComputedStyle(){return {getPropertyValue:()=>''};}});
   const cache=new Map();
   async function module(name){
     if(cache.has(name))return cache.get(name);
@@ -46,13 +49,52 @@ async function fixture(){
     await mod.link(spec=>module(spec.slice(1)));return mod;
   }
   const app=await module('app.js');await app.evaluate();
-  return {app:app.namespace,context,nodes,timers,model,settings};
+  return {app:app.namespace,context,nodes,timers,model,settings,intervals};
 }
 test('search is scoped to the quote route',async()=>{
   const f=await fixture();f.context.location.hash='#/settings';await f.app.route();
   f.nodes.get('quote-search').value='不会跳页';f.nodes.get('quote-search').oninput();
   for(const t of [...f.timers.values()])if(t.delay===200)t.fn();
   assert.equal(f.app.state.view,'settings');assert.equal(f.context.location.hash,'#/settings');
+});
+
+test('market dropdown changes scope and clears filters',async()=>{
+  const f=await fixture();await f.app.route();
+  f.app.state.industry='银行';f.app.state.change_filter='up';
+  f.nodes.get('quote-board-select').value='CN.BJ';f.nodes.get('quote-board-select').onchange();
+  assert.match(f.context.location.hash,/board=CN.BJ/);
+  assert.doesNotMatch(f.context.location.hash,/industry=|change_filter=up/);
+});
+
+test('unconfigured research uses the toolbar action to open settings without a redundant prompt row',async()=>{
+  const f=await fixture();await f.app.route();
+  assert.equal(f.nodes.get('research-refresh').textContent,'配置数据源');
+  assert.equal(f.nodes.get('research-status').hidden,true);
+  f.nodes.get('research-refresh').click();
+  assert.equal(f.context.location.hash,'#/settings');
+  assert.equal(f.model.requests.filter(r=>r.method==='job.submit').length,0);
+});
+
+test('chart periods remain available in intraday and hide for company research',async()=>{
+  const f=await fixture();await f.app.route();
+  f.app.stockResearch.setIntraday(true);
+  assert.equal(f.nodes.get('candle-panel').hidden,true);
+  assert.equal(f.nodes.get('tf-tabs').hidden,false);
+  assert.equal(f.nodes.get('chart-actions').hidden,true);
+  f.app.stockResearch.tab='f10';f.app.stockResearch.render();
+  assert.equal(f.nodes.get('tf-tabs').hidden,true);
+  f.app.stockResearch.setIntraday(false);
+  assert.equal(f.nodes.get('chart-actions').hidden,false);
+});
+
+test('provider cooldown refresh explains the affected API without overwriting a settings draft',async()=>{
+  const f=await fixture();f.context.location.hash='#/settings';await f.app.route();
+  f.nodes.get('provider-user').value='editing-user';f.nodes.get('provider-token').value='editing-token';
+  f.model.provider={configured:true,poll_ms:1000,effective_poll_ms:4500,api_limits:[{api:'stk_mins',message:'该接口限流冷却，其他接口继续可用',remaining_seconds:3590}]};
+  await f.app.management.refreshProvider();
+  assert.equal(f.nodes.get('provider-user').value,'editing-user');assert.equal(f.nodes.get('provider-token').value,'editing-token');
+  assert.match(f.nodes.get('provider-effective').textContent,/4500/);assert.match(f.nodes.get('provider-limits').innerHTML,/stk_mins/);
+  assert.match(f.nodes.get('provider-limits').innerHTML,/其他接口继续可用/);
 });
 
 test('explicit stock navigation survives passive refresh outside the active list',async()=>{
@@ -125,6 +167,34 @@ test('removing a watch from settings preserves route',async()=>{
   assert.equal(f.app.state.view,'settings');assert.equal(f.context.location.hash,'#/settings');assert.equal(button.disabled,false);
 });
 test('default board is loaded before initial quotes',async()=>{const f=await fixture();assert.equal(f.app.state.board,'CN');});
+test('quote fallback timer refreshes the selected stock if stream events are unavailable',async()=>{
+  const f=await fixture();await f.app.route();f.model.rows[0].last=17;
+  f.intervals.find(t=>t.delay===5000).fn();for(let i=0;i<150;i++)await Promise.resolve();
+  assert.equal(f.app.state.detail.quote.last,17);
+});
+test('a slow bar response cannot prevent the selected price from refreshing',async()=>{
+  const f=await fixture();await f.app.route();
+  f.model.bars={symbol:'600001',market:'CN.SH',timeframe:'1d',data_version:1,rows:[{ts:'2026-10-26',open:10,high:12,low:9,close:11}],moving_averages:[]};
+  await f.app.loadStock(f.model.rows[0],2); // route() above advances the generation to 2.
+  f.model.rows[0].last=18;f.model.barWait=deferred();
+  const pending=f.app.loadStock(f.model.rows[0],2,true);
+  for(let i=0;i<60;i++)await Promise.resolve();
+  assert.equal(f.app.state.detail.quote.last,18);assert.equal(f.app.state.bars[0].close,11);
+  assert.ok(f.model.urls.at(-1).includes('from=2026-10-26'));
+  f.model.barWait.resolve({ok:true,json:async()=>({ok:true,data:{...f.model.bars,data_version:2,rows:[{ts:'2026-10-26',open:10,high:18,low:9,close:18}]}})});await pending;
+  assert.equal(f.app.state.bars[0].close,18);
+});
+
+test('event bursts keep one scheduled refresh and route changes do not disable future refreshes',async()=>{
+  const f=await fixture();await f.app.route();
+  for(let i=0;i<100;i++)f.app.scheduleRefresh();
+  assert.equal([...f.timers.values()].filter(t=>t.delay===400).length,1);
+  f.context.location.hash='#/settings';await f.app.route();
+  assert.equal([...f.timers.values()].filter(t=>t.delay===400).length,0);
+  f.context.location.hash='#/quotes';await f.app.route();f.app.scheduleRefresh();
+  assert.equal([...f.timers.values()].filter(t=>t.delay===400).length,1);
+});
+
 test('static control identifiers exist in HTML',()=>{
   const html=fs.readFileSync(path.join(root,'index.html'),'utf8');const ids=new Set([...html.matchAll(/id="([^"]+)"/g)].map(m=>m[1]));
   for(const file of ['app.js','management.js','pulse.js'])for(const m of fs.readFileSync(path.join(root,file),'utf8').matchAll(/\$\("([^"]+)"\)/g)){if(m[1]!=='import-apply')assert.ok(ids.has(m[1]),`${file}: missing #${m[1]}`);}

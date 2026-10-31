@@ -32,8 +32,8 @@ export async function api(url,options={}){
 export const invoke=(method,params={})=>api("/v1/invoke",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({method,params})});
 export class Reads{
   constructor(){this.requests=new Map();}
-  async get(key,url){this.requests.get(key)?.abort();const ctrl=new AbortController();this.requests.set(key,ctrl);try{return await api(url,{signal:ctrl.signal});}finally{if(this.requests.get(key)===ctrl)this.requests.delete(key);}}
-  cancel(){for(const ctrl of this.requests.values())ctrl.abort();this.requests.clear();}
+  get(key,url){const old=this.requests.get(key);if(old?.url===url)return old.promise;old?.controller.abort();const entry={url,controller:new AbortController()};entry.promise=api(url,{signal:entry.controller.signal}).finally(()=>{if(this.requests.get(key)===entry)this.requests.delete(key);});this.requests.set(key,entry);return entry.promise;}
+  cancel(){for(const entry of this.requests.values())entry.controller.abort();this.requests.clear();}
 }
 export async function busy(button,operation){
   if(button?.disabled)return;

@@ -6,16 +6,17 @@ Build the Windows archive on a Windows host with Rust + MSVC (or GNU) toolchain.
 
 ```
 dist/
-  GetRich-Windows-0.2.3-YYYYMMDD/
+  GetRich-Windows-0.2.11-YYYYMMDD/
     GetRich.exe          # GUI workstation (windows_subsystem = windows)
     GetRich-CLI.exe      # JSON CLI and localhost workstation
     config.default.json
     GetRich.ico
     examples/demo.board.json
     RELEASE_NOTES.md
+    REFRESH_ARCHITECTURE_AUDIT_2026-10-28.md
     UI_MARKET_ATLAS_2026-10-25.md
     UI_CORRECTIONS_0.2.1.md
-  GetRich-Windows-0.2.3-YYYYMMDD.zip
+  GetRich-Windows-0.2.11-YYYYMMDD.zip
 ```
 
 Do **not** copy a filled-in `config.json` into `dist/` (it may contain a Tushare token). Use `GETRICH_TUSHARE_TOKEN` or copy `config.default.json` locally. If an older pack already shipped a token, rotate it.
@@ -45,7 +46,7 @@ Requires: Rust stable, `cargo` on PATH. The script uses the lockfile, creates a 
 
 `GetRich-CLI.exe serve` contains the browser workstation, so a separate API executable is unnecessary.
 
-For 0.2.3, `RELEASE_NOTES.md` is copied from `docs/RELEASE_0.2.3.md`. This version retains schema 6 for stock research caches. Close the old application, back up its configuration and database, then copy them to the new version directory before launching. Use the original backup to roll back; older applications cannot read a schema 6 database.
+For 0.2.11, `RELEASE_NOTES.md` is copied from `docs/RELEASE_0.2.11.md`. This version migrates existing databases to schema 7 for persistent response and historical coverage storage. Close the old application, back up its configuration and database, then copy them to the new version directory before launching. Use the original backup to roll back; older applications cannot read a schema 7 database.
 
 ## Linux / this VM (closest runnable artifact)
 

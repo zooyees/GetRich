@@ -40,7 +40,15 @@ pub fn valuation_row(table: &Table, row: &Value) -> Option<ListingImport> {
 }
 impl Client {
     pub fn valuations_bundle(&self) -> Result<ImportBundle, AppError> {
-        self.valuations_bundle_at(&self.last_open_day()?)
+        let mut last = None;
+        for date in self.recent_open_days()?.into_iter().take(6) {
+            match self.valuations_bundle_at(&date) {
+                Ok(bundle) => return Ok(bundle),
+                Err(e) if e.to_string().contains("的市值尚未返回") => last = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| AppError::Message("没有已发布的近期市值数据".into())))
     }
     pub fn valuations_bundle_at(&self, date: &str) -> Result<ImportBundle, AppError> {
         validate_date(date)?;
@@ -76,7 +84,15 @@ impl Client {
         ))
     }
     pub fn indices_bundle(&self) -> Result<ImportBundle, AppError> {
-        self.indices_bundle_at(&self.last_open_day()?)
+        let mut last = None;
+        for date in self.recent_open_days()?.into_iter().take(6) {
+            match self.indices_bundle_at(&date) {
+                Ok(bundle) => return Ok(bundle),
+                Err(e) if e.to_string().contains("无日线") => last = Some(e),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| AppError::Message("没有已发布的近期指数日线".into())))
     }
     pub fn indices_bundle_at(&self, date: &str) -> Result<ImportBundle, AppError> {
         validate_date(date)?;

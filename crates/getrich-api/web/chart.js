@@ -1,9 +1,14 @@
 export function sma(values,n){let sum=0;return values.map((v,i)=>{sum+=v;if(i>=n)sum-=values[i-n];return i+1>=n?sum/n:null;});}
 export function range(length,span,end=length){if(!length)return {start:0,end:0,span:0};span=Math.max(1,Math.min(length,Math.round(span||120)));end=Math.max(span,Math.min(length,end));return {start:end-span,end,span};}
 export function hitIndex(x,left,slot,padding,count){const i=Math.floor((x-left)/slot-padding);return i<0||i>=count?null:i;}
+export const MA_PERIODS=[5,10,20,30,120,250];
+export const maColor=p=>({5:"#9aa8bd",10:"#3b82f6",20:"#dc8e41",30:"#b985ed",120:"#43c4b9",250:"#dab547"})[p];
+export function slotWidth(width,count){return width/Math.max(1,count);}
+export function candleWidth(slot){return Math.max(1,slot*.62);}
 export class Chart{
-  constructor(canvas,meta){
-    this.canvas=canvas;this.meta=meta;this.rows=[];this.span=120;this.end=0;this.hover=null;this.loading=false;
+  constructor(canvas,meta,{controls=null,onToggle=()=>{}}={}){
+    this.canvas=canvas;this.meta=meta;this.rows=[];this.span=120;this.end=0;this.hover=null;this.loading=false;this.controls=controls;this.enabled=new Set(MA_PERIODS);this.onToggle=onToggle;
+    if(controls){controls.innerHTML='<span class="ma-heading">均线</span><div class="ma-options">'+MA_PERIODS.map(p=>`<label style="--ma-color:${maColor(p)}"><input type="checkbox" data-ma-period="${p}" checked><span>MA${p}${p===120?" · 半年":p===250?" · 年线":""}</span><output data-ma-value="${p}">—</output></label>`).join("")+"</div>";controls.onchange=e=>{const p=Number(e.target?.dataset.maPeriod);if(!MA_PERIODS.includes(p))return;if(e.target.checked)this.enabled.add(p);else this.enabled.delete(p);this.draw();this.onToggle([...this.enabled]);};}
     this.observer=new ResizeObserver(()=>this.draw());this.observer.observe(canvas);
     canvas.addEventListener("mousemove",event=>{if(!this.grid)return;const rect=canvas.getBoundingClientRect();this.hover=hitIndex(event.clientX-rect.left,this.grid.left,this.grid.slot,this.grid.padding,this.grid.count);this.draw();});
     canvas.addEventListener("mouseleave",()=>{this.hover=null;this.draw();});
@@ -16,12 +21,13 @@ export class Chart{
       if(event.key==="End")this.reset();if(event.key==="Home"){this.end=Math.min(this.span,this.rows.length);this.draw();}
     });
   }
-  setData(rows,{reset=false,loading=false,message="暂无该周期 K 线"}={}){
+  setData(rows,{reset=false,loading=false,message="暂无该周期 K 线",movingAverages=null,periods=null,timeframe="1d"}={}){
     const atEnd=this.end===this.rows.length;this.rows=rows||[];this.message=message;this.loading=loading;
     if(reset){this.span=Math.min(120,this.rows.length);this.end=this.rows.length;this.hover=null;}else if(atEnd||!this.end)this.end=this.rows.length;
-    this.ma=[sma(this.rows.map(r=>r.close),5),sma(this.rows.map(r=>r.close),10),sma(this.rows.map(r=>r.close),20)];this.draw();
+    if(periods)this.enabled=new Set(periods.filter(p=>MA_PERIODS.includes(p)));
+    this.ma=MA_PERIODS.map(period=>({period,values:movingAverages?.find(ma=>ma.period===period)?.values||(timeframe==="1d"?sma(this.rows.map(r=>r.close),period):this.rows.map(()=>null))}));this.draw();
   }
-  zoom(factor){if(!this.rows.length)return;this.span=Math.max(1,Math.min(this.rows.length,Math.round(this.span*factor)));this.draw();}
+  zoom(factor){if(!this.rows.length)return;this.span=Math.max(1,Math.min(this.rows.length,factor<1?Math.min(this.span-1,Math.round(this.span*factor)):Math.max(this.span+1,Math.round(this.span*factor))));this.hover=null;this.draw();}
   move(delta){this.end=Math.max(this.span,Math.min(this.rows.length,this.end+delta));this.hover=null;this.draw();}
   reset(){this.span=Math.min(120,this.rows.length);this.end=this.rows.length;this.hover=null;this.draw();}
   draw(){
@@ -31,24 +37,25 @@ export class Chart{
     const up=css.getPropertyValue("--up").trim(),down=css.getPropertyValue("--down").trim();ctx.font="11px system-ui";ctx.fillStyle=muted;
     if(this.loading||!this.rows.length){this.grid=null;ctx.textAlign="center";ctx.fillText(this.loading?"正在载入 K 线…":this.message,w/2,h/2);this.meta.textContent=this.loading?"加载中":this.message;return;}
     const visible=range(this.rows.length,this.span,this.end);this.span=visible.span;this.end=visible.end;
-    const rows=this.rows.slice(visible.start,visible.end);const ma=this.ma.map(a=>a.slice(visible.start,visible.end));
+    const rows=this.rows.slice(visible.start,visible.end);const ma=this.ma.filter(a=>this.enabled.has(a.period)).map(a=>({...a,values:a.values.slice(visible.start,visible.end)}));
     let min=Math.min(...rows.map(r=>r.low)),max=Math.max(...rows.map(r=>r.high));
-    for(const a of ma)for(const value of a)if(value!=null){min=Math.min(min,value);max=Math.max(max,value);}
+    for(const a of ma)for(const value of a.values)if(value!=null){min=Math.min(min,value);max=Math.max(max,value);}
     const margin=Math.max((max-min)*.06,Math.abs(max)*.001,.01);min-=margin;max+=margin;
     const left=62,right=w-18,top=20,priceBottom=h*.70,volumeBottom=h-32,volumeTop=priceBottom+20;
-    const slots=Math.max(40,rows.length),padding=slots-rows.length,slot=(right-left)/slots;
+    const padding=0,slot=slotWidth(right-left,rows.length);
     const x=i=>left+(padding+i+.5)*slot,y=p=>top+(max-p)/(max-min)*(priceBottom-top);
     ctx.strokeStyle=line;ctx.lineWidth=1;ctx.textAlign="right";
     for(let i=0;i<=4;i++){const price=min+(max-min)*i/4,py=y(price);ctx.fillText(price.toFixed(2),left-8,py+4);ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(right,py);ctx.stroke();}
     const volumeMax=Math.max(1,...rows.map(r=>r.volume||0));
     ctx.textAlign="right";ctx.fillText("量 "+volumeMax.toLocaleString("zh-CN",{notation:"compact"}),left-8,volumeTop+9);
-    rows.forEach((row,i)=>{const color=row.close>=row.open?up:down,cx=x(i),width=Math.max(1,Math.min(9,slot*.65));ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(cx,y(row.high));ctx.lineTo(cx,y(row.low));ctx.stroke();ctx.fillRect(cx-width/2,y(Math.max(row.open,row.close)),width,Math.max(1,y(Math.min(row.open,row.close))-y(Math.max(row.open,row.close))));const vh=(row.volume||0)/volumeMax*(volumeBottom-volumeTop);ctx.globalAlpha=.45;ctx.fillRect(cx-width/2,volumeBottom-vh,width,vh);ctx.globalAlpha=1;});
-    ma.forEach((a,idx)=>{ctx.strokeStyle=[muted,"#3b82f6","#d97706"][idx];ctx.beginPath();let started=false;a.forEach((value,i)=>{if(value==null)return;if(!started){ctx.moveTo(x(i),y(value));started=true;}else ctx.lineTo(x(i),y(value));});ctx.stroke();});
+    rows.forEach((row,i)=>{const color=row.close>=row.open?up:down,cx=x(i),width=candleWidth(slot);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(cx,y(row.high));ctx.lineTo(cx,y(row.low));ctx.stroke();ctx.fillRect(cx-width/2,y(Math.max(row.open,row.close)),width,Math.max(1,y(Math.min(row.open,row.close))-y(Math.max(row.open,row.close))));const vh=(row.volume||0)/volumeMax*(volumeBottom-volumeTop);ctx.globalAlpha=.45;ctx.fillRect(cx-width/2,volumeBottom-vh,width,vh);ctx.globalAlpha=1;});
+    ma.forEach(a=>{ctx.strokeStyle=maColor(a.period);ctx.beginPath();let started=false;a.values.forEach((value,i)=>{if(value==null){started=false;return;}if(!started){ctx.moveTo(x(i),y(value));started=true;}else ctx.lineTo(x(i),y(value));});ctx.stroke();});
     ctx.fillStyle=muted;ctx.textAlign="center";for(const i of [...new Set([0,Math.floor(rows.length/2),rows.length-1])])ctx.fillText(rows[i].ts.slice(0,10),Math.max(left+42,Math.min(right-42,x(i))),h-12);
     const hi=this.hover!=null&&rows[this.hover]?this.hover:rows.length-1,row=rows[hi];
     ctx.strokeStyle=muted;ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(x(hi),top);ctx.lineTo(x(hi),volumeBottom);ctx.stroke();ctx.setLineDash([]);
     this.meta.textContent=`${row.ts.slice(0,10)}  开 ${row.open.toFixed(2)}  高 ${row.high.toFixed(2)}  低 ${row.low.toFixed(2)}  收 ${row.close.toFixed(2)}  · 未复权`;
     canvas.setAttribute("aria-label",this.meta.textContent+"；方向键平移，加减键缩放，End 回到最新");
-    this.grid={left,slot,padding,count:rows.length};
+    if(this.controls){this.controls.querySelectorAll("[data-ma-period]").forEach(input=>input.checked=this.enabled.has(Number(input.dataset.maPeriod)));this.controls.querySelectorAll("[data-ma-value]").forEach(output=>{const p=Number(output.dataset.maValue),value=this.ma.find(a=>a.period===p)?.values[visible.start+hi];output.textContent=value==null?"—":value.toFixed(2);output.title=`${row.ts.slice(0,10)} · ${p} 个交易日简单均值${value==null?" · 日线不足":""}`;});}
+    this.grid={left,slot,padding,count:rows.length,candle:candleWidth(slot)};
   }
 }

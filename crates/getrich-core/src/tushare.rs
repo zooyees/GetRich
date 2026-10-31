@@ -11,8 +11,12 @@ use crate::symbol::parse_instrument;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+mod budget;
+mod cache;
+mod realtime;
+pub(crate) use budget::{cooldown_ms, permission_denied};
+pub use realtime::{effective_poll_ms, quote_batches};
 
 const ENDPOINT: &str = "https://api.tushare.pro";
 
@@ -57,40 +61,6 @@ fn collect_pages(
     )))
 }
 
-#[derive(Debug)]
-struct TokenBucket {
-    per_min: u32,
-    hits: Mutex<VecDeque<u64>>,
-}
-
-impl TokenBucket {
-    fn new(per_min: u32) -> Self {
-        Self {
-            per_min: per_min.max(1),
-            hits: Mutex::new(VecDeque::new()),
-        }
-    }
-
-    fn try_take_at(&self, now_ms: u64) -> Result<(), u64> {
-        let mut hits = self.hits.lock().unwrap_or_else(|e| e.into_inner());
-        admit(&mut hits, now_ms, self.per_min)
-    }
-
-    fn wait(&self) {
-        loop {
-            let now = now_ms();
-            match self.try_take_at(now) {
-                Ok(()) => return,
-                Err(wait_ms) => thread::sleep(Duration::from_millis(wait_ms.max(20))),
-            }
-        }
-    }
-
-    fn try_wait(&self) -> bool {
-        self.try_take_at(now_ms()).is_ok()
-    }
-}
-
 /// Sliding 60s window. Returns `Err(wait_ms)` when the bucket is empty.
 pub fn admit(hits: &mut VecDeque<u64>, now_ms: u64, per_min: u32) -> Result<(), u64> {
     let window = 60_000u64;
@@ -117,34 +87,6 @@ fn now_ms() -> u64 {
 }
 
 #[derive(Debug)]
-struct Backoff {
-    until: Option<Instant>,
-    delay: Duration,
-}
-
-impl Backoff {
-    fn remaining(&self) -> Option<Duration> {
-        let until = self.until?;
-        until.checked_duration_since(Instant::now())
-    }
-
-    fn trip(&mut self) {
-        let next = (self.delay * 2).min(Duration::from_secs(60));
-        self.delay = if self.delay < Duration::from_secs(1) {
-            Duration::from_secs(1)
-        } else {
-            next
-        };
-        self.until = Some(Instant::now() + self.delay);
-    }
-
-    fn reset(&mut self) {
-        self.until = None;
-        self.delay = Duration::from_millis(500);
-    }
-}
-
-#[derive(Debug)]
 pub struct Client {
     agent: ureq::Agent,
     shared_store: Option<crate::db::Database>,
@@ -153,9 +95,11 @@ pub struct Client {
     token: String,
     timeout: Duration,
     live_timeout: Duration,
-    rt_k_limit: TokenBucket,
-    backoff: Mutex<Backoff>,
+    per_min: u32,
+    budget: Mutex<budget::Memory>,
+    endpoint: String,
     last_quote_api: Mutex<Option<String>>,
+    historical_gate: Mutex<()>,
 }
 
 impl Client {
@@ -186,12 +130,11 @@ impl Client {
             token,
             timeout: Duration::from_millis(timeout_ms.max(90_000)),
             live_timeout: Duration::from_millis(live_timeout_ms.max(1_000)),
-            rt_k_limit: TokenBucket::new(rate_per_min.max(1)),
-            backoff: Mutex::new(Backoff {
-                until: None,
-                delay: Duration::from_millis(500),
-            }),
+            per_min: rate_per_min.max(1),
+            budget: Mutex::new(budget::Memory::default()),
+            endpoint: ENDPOINT.into(),
             last_quote_api: Mutex::new(None),
+            historical_gate: Mutex::new(()),
         })
     }
 
@@ -214,55 +157,8 @@ impl Client {
         self
     }
 
-    fn shared_take_at(&self, now: u64) -> Result<u64, AppError> {
-        let Some(store) = &self.shared_store else {
-            return Ok(0);
-        };
-        let mut conn = store.connect()?;
-        let tx = conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(crate::db::DbError::from)?;
-        let blocked: u64 = tx
-            .query_row(
-                "SELECT COALESCE(MAX(until_ms),0) FROM provider_backoff WHERE account=?1",
-                [&self.account],
-                |r| r.get(0),
-            )
-            .map_err(crate::db::DbError::from)?;
-        if blocked > now {
-            return Ok(blocked - now);
-        }
-        tx.execute(
-            "DELETE FROM provider_requests WHERE account=?1 AND requested_at_ms<=?2",
-            rusqlite::params![self.account, now.saturating_sub(60_000)],
-        )
-        .map_err(crate::db::DbError::from)?;
-        let (count,oldest):(u32,u64)=tx.query_row("SELECT COUNT(*),COALESCE(MIN(requested_at_ms),0) FROM provider_requests WHERE account=?1",[&self.account],|r|Ok((r.get(0)?,r.get(1)?))).map_err(crate::db::DbError::from)?;
-        if count >= self.rt_k_limit.per_min {
-            return Ok(oldest.saturating_add(60_000).saturating_sub(now).max(1));
-        }
-        tx.execute(
-            "INSERT INTO provider_requests(account,requested_at_ms) VALUES (?1,?2)",
-            rusqlite::params![self.account, now],
-        )
-        .map_err(crate::db::DbError::from)?;
-        tx.commit().map_err(crate::db::DbError::from)?;
-        Ok(0)
-    }
-
-    fn shared_block(&self, until: u64) -> Result<(), AppError> {
-        if let Some(store) = &self.shared_store {
-            store.connect()?.execute("INSERT INTO provider_backoff(account,until_ms) VALUES (?1,?2) ON CONFLICT(account) DO UPDATE SET until_ms=MAX(until_ms,excluded.until_ms)",rusqlite::params![self.account,until]).map_err(crate::db::DbError::from)?;
-        }
-        Ok(())
-    }
-
-    pub fn backoff_remaining(&self) -> Option<Duration> {
-        self.backoff.lock().ok().and_then(|g| g.remaining())
-    }
-
     pub fn call(&self, api_name: &str, params: Value, fields: &str) -> Result<Table, AppError> {
-        self.call_inner(api_name, params, fields, false, false)
+        self.call_inner(api_name, params, fields, false)
     }
 
     pub fn call_live(
@@ -271,12 +167,12 @@ impl Client {
         params: Value,
         fields: &str,
     ) -> Result<Table, AppError> {
-        self.call_inner(api_name, params, fields, true, true)
+        self.call_inner(api_name, params, fields, true)
     }
 
     #[allow(dead_code)]
     fn call_optional(&self, api_name: &str, params: Value, fields: &str) -> Option<Table> {
-        match self.call_inner(api_name, params, fields, true, false) {
+        match self.call_inner(api_name, params, fields, true) {
             Ok(t) => Some(t),
             Err(e) => {
                 tracing::debug!(api = api_name, error = %e, "Tushare optional call skipped");
@@ -291,30 +187,24 @@ impl Client {
         params: Value,
         fields: &str,
         live: bool,
-        wait_rate: bool,
     ) -> Result<Table, AppError> {
-        if live {
-            if let Some(wait) = self.backoff_remaining() {
-                return Err(AppError::Message(format!(
-                    "Tushare {api_name}: 限流退避 {}s",
-                    wait.as_secs().max(1)
-                )));
-            }
-            if wait_rate {
-                self.rt_k_limit.wait();
-            } else if !self.rt_k_limit.try_wait() {
-                return Err(AppError::Message(format!(
-                    "Tushare {api_name}: 客户端频次已满"
-                )));
+        // Never serialize live quotes behind historical downloads.
+        let _gate = if live {
+            None
+        } else {
+            Some(
+                self.historical_gate
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+            )
+        };
+        let cache_key = self.response_cache_key(api_name, &params, fields, live);
+        if let Some(key) = &cache_key {
+            if let Some(table) = self.cached_response(key)? {
+                return Ok(table);
             }
         }
-        let wait = self.shared_take_at(now_ms())?;
-        if wait > 0 {
-            return Err(AppError::Message(format!(
-                "Tushare 账号共享频次/退避预算已满，请在 {} 秒后重试",
-                wait.div_ceil(1000)
-            )));
-        }
+        self.check_budget(api_name)?;
         let body = json!({
             "api_name": api_name,
             "token": self.token,
@@ -328,10 +218,24 @@ impl Client {
         };
         let resp: Value = self
             .agent
-            .post(ENDPOINT)
+            .post(&self.endpoint)
             .timeout(timeout)
             .send_json(body)
-            .map_err(|e| AppError::Message(format!("Tushare 请求失败: {e}")))?
+            .map_err(|e| {
+                if let ureq::Error::Status(429, response) = &e {
+                    let seconds = response
+                        .header("Retry-After")
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(60)
+                        .clamp(1, 86_400);
+                    let _ = self.shared_block(
+                        api_name,
+                        "rate",
+                        now_ms().saturating_add(seconds * 1000),
+                    );
+                }
+                AppError::Message(format!("Tushare {api_name} 请求失败: {e}"))
+            })?
             .into_json()
             .map_err(|e| AppError::Message(format!("Tushare 响应不是 JSON: {e}")))?;
         let code = resp.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
@@ -341,16 +245,8 @@ impl Client {
                 .and_then(|v| v.as_str())
                 .unwrap_or("Tushare 返回错误");
             let err = AppError::Message(format!("Tushare {api_name}: {msg}"));
-            if is_rate_limited(&err) {
-                self.shared_block(now_ms().saturating_add(60_000))?;
-                if let Ok(mut b) = self.backoff.lock() {
-                    b.trip();
-                }
-            }
+            self.record_failure_at(api_name, msg, now_ms())?;
             return Err(err);
-        }
-        if let Ok(mut b) = self.backoff.lock() {
-            b.reset();
         }
         let data = resp.get("data").cloned().unwrap_or(json!({}));
         let fields = data
@@ -367,7 +263,18 @@ impl Client {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        Ok(Table { fields, items })
+        let table = Table { fields, items };
+        if table
+            .items
+            .iter()
+            .any(|r| r.as_array().is_none_or(|r| r.len() != table.fields.len()))
+        {
+            return Err(AppError::Message("数据源字段与行不匹配，未缓存响应".into()));
+        }
+        if let Some(key) = cache_key {
+            self.store_response(&key, api_name, &params, &table)?;
+        }
+        Ok(table)
     }
 }
 
@@ -376,13 +283,14 @@ pub fn is_rate_limited(err: &AppError) -> bool {
     let lower = s.to_ascii_lowercase();
     lower.contains("429")
         || s.contains("频率")
+        || s.contains("频次")
         || s.contains("限流")
         || lower.contains("too many")
         || lower.contains("freq")
         || lower.contains("rate limit")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Table {
     pub fields: Vec<String>,
     pub items: Vec<Value>,
@@ -502,14 +410,12 @@ pub fn map_rt_k(table: &Table) -> MappedQuotes {
         let Some(last) = table.f64(row, "close") else {
             continue;
         };
-        let trade_time = table
+        let Some(trade_time) = table
             .str(row, "trade_time")
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| {
-                session::shanghai_now()
-                    .format("%Y-%m-%d %H:%M:%S")
-                    .to_string()
-            });
+            .filter(|s| s.contains(':') && session::parse_cn_ts(s).is_ok())
+        else {
+            continue;
+        };
         let prev = table.f64(row, "pre_close");
         let change_pct = table
             .f64(row, "pct_chg")
@@ -610,13 +516,28 @@ pub fn map_daily_row(
 }
 
 impl Client {
+    pub(crate) fn poll_open_day(&self) -> Result<String, AppError> {
+        let today = session::shanghai_today();
+        let table = self.call_live("trade_cal", json!({"exchange":"SSE","is_open":"1","start_date":session::yyyymmdd(session::days_before(today,21)),"end_date":session::yyyymmdd(today)}),"cal_date,is_open")?;
+        table
+            .items
+            .iter()
+            .filter(|row| table.str(row, "is_open").is_none_or(|v| v == "1"))
+            .filter_map(|row| table.str(row, "cal_date"))
+            .filter(|d| {
+                chrono::NaiveDate::parse_from_str(d, "%Y%m%d").is_ok()
+                    && d <= &session::yyyymmdd(today)
+            })
+            .max()
+            .ok_or_else(|| AppError::Message("交易日历未返回有效交易日".into()))
+    }
     pub fn last_open_day(&self) -> Result<String, AppError> {
         self.recent_open_days()?
             .into_iter()
             .next()
             .ok_or_else(|| AppError::Message("交易日历未返回有效交易日".into()))
     }
-    fn recent_open_days(&self) -> Result<Vec<String>, AppError> {
+    pub(crate) fn recent_open_days(&self) -> Result<Vec<String>, AppError> {
         let today = session::shanghai_today();
         let cal=self.call("trade_cal",json!({"exchange":"SSE","is_open":"1","start_date":session::yyyymmdd(session::days_before(today,21)),"end_date":session::yyyymmdd(today)}),"cal_date,is_open")?;
         let mut dates: Vec<_> = cal
@@ -752,13 +673,11 @@ impl Client {
         let Some(ts_code) = key_to_ts_code(key) else {
             return Ok(ImportBundle::default());
         };
-        let daily = self.paged_table(
+        let daily = self.history_table(
             api,
-            json!({
-                "ts_code": ts_code,
-                "start_date": start,
-                "end_date": end,
-            }),
+            &ts_code,
+            start,
+            end,
             "ts_code,trade_date,open,high,low,close,pre_close,vol,amount",
         )?;
         let mut bars = Vec::new();
@@ -1031,12 +950,12 @@ mod tests {
         let second = Client::new("test".into(), "fixture-token".into(), 1000, 1000, 2)
             .unwrap()
             .with_shared_store(store);
-        assert_eq!(first.shared_take_at(100_000).unwrap(), 0);
-        assert_eq!(second.shared_take_at(100_001).unwrap(), 0);
-        assert!(first.shared_take_at(100_002).unwrap() > 0);
-        first.shared_block(200_000).unwrap();
-        assert_eq!(second.shared_take_at(150_000).unwrap(), 50_000);
-        assert_eq!(second.shared_take_at(200_000).unwrap(), 0);
+        assert_eq!(first.shared_take_at("rt_k", 100_000).unwrap(), 0);
+        assert_eq!(second.shared_take_at("rt_k", 100_001).unwrap(), 0);
+        assert!(first.shared_take_at("rt_k", 100_002).unwrap() > 0);
+        first.shared_block("rt_k", "rate", 200_000).unwrap();
+        assert_eq!(second.shared_take_at("rt_k", 150_000).unwrap(), 50_000);
+        assert_eq!(second.shared_take_at("rt_k", 200_000).unwrap(), 0);
         let _ = std::fs::remove_file(path);
     }
 }

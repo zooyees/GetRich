@@ -22,14 +22,20 @@ export class Management{
     const data=await api("/v1/settings");this.settings=data;this.callbacks.settings(data);
     if(!this.callbacks.isView("settings"))return;
     $("default-board").innerHTML=BOARDS.map(([id,label])=>`<option value="${id}">${label}</option>`).join("");$("default-board").value=data.default_board;
-    const p=data.provider||{};$("tushare-status").textContent=`${p.configured?"已配置":"未配置"} · ${p.in_session?"交易时段":"非交易时段"}${p.last_success_at?" · 上次成功 "+time(p.last_success_at):""}${p.last_error?" · "+p.last_error:""}`;
+    const p=data.provider||{};this.renderProvider(p);
     $("provider-user").value=p.user_id||"";$("provider-token").placeholder=p.token_mask||"未配置";$("provider-enabled").checked=!!p.enabled;$("provider-poll").value=p.poll_ms||5000;$("provider-universe").value=p.universe||"full";$("provider-test").disabled=!p.configured;
     const prefs=data.preferences||{};$("pref-theme").value=prefs.theme||"dark";$("pref-colors").value=prefs.colors||"red_up";$("pref-width").value=prefs.list_width||440;
     $("pref-columns").innerHTML=[...new Set([...(prefs.columns||[]),...COLUMNS.map(c=>c[0])])].map(key=>{const label=COLUMNS.find(c=>c[0]===key)?.[1]||key;return `<div class="column-option"><label class="check"><input type="checkbox" value="${key}" ${["symbol","name"].includes(key)?"checked disabled":(prefs.columns||[]).includes(key)?"checked":""}>${label}</label><button type="button" data-column-up aria-label="前移 ${label}">↑</button><button type="button" data-column-down aria-label="后移 ${label}">↓</button></div>`;}).join("");
     this.renderWatch(data.watchlist||[]);
     $("recent-views").innerHTML=(prefs.recent||[]).map(value=>{const [market,symbol]=value.split(":");return `<button type="button" data-recent-market="${esc(market)}" data-recent-symbol="${esc(symbol)}">${esc(value)}</button>`;}).join("")||"暂无近期查看";
-    $("storage-info").innerHTML=[["配置文件",data.config_path],["数据库",data.db_path],["数据目录",data.data_root]].map(([key,value])=>`<dt>${key}</dt><dd>${esc(value)}</dd>`).join("");
+    $("storage-info").innerHTML=[["配置文件",data.config_path],["数据库",data.db_path],["数据目录",data.data_root],["本地缓存",`${data.local_storage?.cached_responses||0} 个响应 · ${data.local_storage?.history_rows||0} 条历史 · ${data.local_storage?.covered_ranges||0} 个区间`],["同步策略","历史只补缺口；实时行情持续更新；成功响应自动落盘"]].map(([key,value])=>`<dt>${key}</dt><dd>${esc(value)}</dd>`).join("");
   }
+  renderProvider(p){
+    $("tushare-status").textContent=`${p.configured?"已配置":"未配置"} · ${p.in_session?"交易时段":"非交易时段"}${p.last_success_at?" · 上次成功 "+time(p.last_success_at):""}${p.last_error?" · "+p.last_error:""}`;
+    $("provider-effective").textContent=`配置刷新 ${p.poll_ms||5000} 毫秒 · 有效间隔 ${p.effective_poll_ms||p.poll_ms||5000} 毫秒，按各接口额度自适应。`;
+    $("provider-limits").innerHTML=(p.api_limits||[]).map(v=>`<p class="error-text">${esc(v.api)} · ${esc(v.message)} · 约 ${v.remaining_seconds} 秒后可重试</p>`).join("");
+  }
+  async refreshProvider(){const p=await api("/v1/tushare");if(!this.callbacks.isView("settings"))return;if(this.settings)this.settings.provider=p;this.renderProvider(p);}
   renderWatch(list){
     this.watchSearch.setWatchlist(list);
     $("watch-edit").innerHTML=list.map(w=>`<li><span><strong>${esc(w.name||w.symbol)}</strong> ${esc(w.symbol)} · ${esc(w.market)}</span><div class="actions"><button data-move="-1" data-symbol="${esc(w.symbol)}" data-market="${esc(w.market)}" aria-label="上移 ${esc(w.symbol)}">↑</button><button data-move="1" data-symbol="${esc(w.symbol)}" data-market="${esc(w.market)}" aria-label="下移 ${esc(w.symbol)}">↓</button><button data-remove="${esc(w.symbol)}" data-market="${esc(w.market)}">移除</button></div></li>`).join("")||"<li>暂无自选，可在上方添加。</li>";

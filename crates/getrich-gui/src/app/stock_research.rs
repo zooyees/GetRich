@@ -42,10 +42,10 @@ impl GetRichApp {
             }
         }
     }
-    fn research_tag(&self, section: &str) -> String {
+    pub(super) fn research_tag(&self, section: &str) -> String {
         format!("research:{}:{section}", self.stock.key)
     }
-    fn research_busy(&self, section: &str) -> bool {
+    pub(super) fn research_busy(&self, section: &str) -> bool {
         let tag = self.research_tag(section);
         self.stock.pending.contains(&tag)
             || self.stock.jobs.get(&tag).is_some_and(|id| {
@@ -105,7 +105,7 @@ impl GetRichApp {
         if !matches!(self.screen, Screen::Quotes | Screen::Detail) || self.detail.is_none() {
             return;
         }
-        if self.stock.intraday
+        if !self.controller.is_pending("read:research")
             && self
                 .stock
                 .tick
@@ -121,17 +121,31 @@ impl GetRichApp {
         }
     }
     pub(super) fn stock_tabs(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            for (i, label) in ["行情走势", "F10 · 公司财务", "资金流向", "公司公告"]
-                .iter()
-                .enumerate()
+        let narrow = ui.available_width() < 430.0;
+        let width = ((ui.available_width() - 12.0) / 4.0).min(100.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().interact_size.y = 26.0;
+            ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
+            for (index, label) in [
+                "行情走势",
+                if narrow {
+                    "F10 财务"
+                } else {
+                    "F10 · 公司财务"
+                },
+                "资金流向",
+                "公司公告",
+            ]
+            .iter()
+            .enumerate()
             {
-                if chip(ui, label, self.stock.tab == i).clicked() {
-                    self.stock.tab = i;
+                if super::detail_workspace::tab(ui, label, self.stock.tab == index, width).clicked()
+                {
+                    self.stock.tab = index;
                 }
             }
         });
-        ui.add_space(10.0);
     }
     pub(super) fn research_status(&mut self, ui: &mut egui::Ui, section: &str) {
         let busy = self.research_busy(section);
