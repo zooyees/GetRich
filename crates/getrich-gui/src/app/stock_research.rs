@@ -4,6 +4,10 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub(super) struct StockResearch {
+    pub drafts: HashMap<String, Value>,
+    pub histories: HashMap<String, Value>,
+    pub screen: Value,
+    pub screen_params: Option<(bool, f64, f64)>,
     pub tab: usize,
     pub intraday: bool,
     pub data: Value,
@@ -20,16 +24,36 @@ impl GetRichApp {
         let Some(key) = self.pending_key.clone() else {
             return;
         };
+        let analysis = self.stock.tab == 4;
+        let mode = self.preferences.research_mode.clone();
+        let basis = self.preferences.price_basis.clone();
+        let source = self.preferences.adjustment_source.clone();
         if let Err(e) = self.controller.submit("read:research", move |core| {
             core.stock_research(&key)
-                .map(|v| Payload::Research(key, v))
+                .and_then(|mut v| {
+                    if analysis {
+                        v["analysis"] = core.analysis_workspace_basis(
+                            &key,
+                            None,
+                            Some(&mode),
+                            &basis,
+                            &source,
+                        )?;
+                    }
+                    Ok(Payload::Research(key, v))
+                })
                 .map_err(|e| e.to_string())
         }) {
             self.error = Some(e);
         }
     }
-    fn research_section(&self) -> &'static str {
+    pub(super) fn research_section(&self) -> &'static str {
         match self.stock.tab {
+            4 => match self.preferences.research_mode.as_str() {
+                "intraday" => "intraday",
+                "value" => "f10",
+                _ => "history",
+            },
             1 => "f10",
             2 => "funds",
             3 => "announcements",
@@ -61,6 +85,9 @@ impl GetRichApp {
             })
     }
     pub(super) fn request_research(&mut self, section: &str, force: bool) {
+        if section == "analysis" {
+            return;
+        }
         let Some(d) = self.detail.as_ref() else {
             return;
         };
@@ -122,7 +149,7 @@ impl GetRichApp {
     }
     pub(super) fn stock_tabs(&mut self, ui: &mut egui::Ui) {
         let narrow = ui.available_width() < 430.0;
-        let width = ((ui.available_width() - 12.0) / 4.0).min(100.0);
+        let width = ((ui.available_width() - 16.0) / 5.0).min(100.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.spacing_mut().interact_size.y = 26.0;
@@ -136,6 +163,7 @@ impl GetRichApp {
                 },
                 "资金流向",
                 "公司公告",
+                "研究分析",
             ]
             .iter()
             .enumerate()
@@ -143,6 +171,9 @@ impl GetRichApp {
                 if super::detail_workspace::tab(ui, label, self.stock.tab == index, width).clicked()
                 {
                     self.stock.tab = index;
+                    if index == 4 {
+                        self.read_research();
+                    }
                 }
             }
         });
@@ -218,6 +249,10 @@ impl GetRichApp {
         );
     }
     pub(super) fn research_panel(&mut self, ui: &mut egui::Ui) {
+        if self.stock.tab == 4 {
+            self.analysis_panel(ui);
+            return;
+        }
         let section = self.research_section();
         self.research_status(ui, section);
         ui.add_space(12.0);
@@ -676,7 +711,7 @@ fn sum_money(rows: &[Value], count: usize) -> String {
         .collect();
     money(values.map(|v| v.iter().sum()))
 }
-fn metrics(ui: &mut egui::Ui, fields: &[(&str, String)]) {
+pub(super) fn metrics(ui: &mut egui::Ui, fields: &[(&str, String)]) {
     let columns = if ui.available_width() > 700.0 { 4 } else { 2 };
     for row in fields.chunks(columns) {
         ui.columns(columns, |cols| {

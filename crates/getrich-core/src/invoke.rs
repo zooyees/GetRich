@@ -10,6 +10,30 @@ use std::path::Path;
 
 pub fn invoke(app: &App, method: &str, params: Value) -> Result<Value, AppError> {
     match method {
+        "workbench.catalog" => crate::professional::execute(app, "catalog", &params),
+        "workbench.execute" => crate::professional::execute(
+            app,
+            str_param(&params, "tool").unwrap_or("overview"),
+            params.get("values").unwrap_or(&json!({})),
+        ),
+        "stock.analysis" => {
+            let key = app.parse_key(
+                str_param(&params, "symbol").unwrap_or(""),
+                str_param(&params, "market"),
+            )?;
+            app.analysis_workspace_basis(
+                &key,
+                str_param(&params, "as_of"),
+                str_param(&params, "mode"),
+                str_param(&params, "basis").unwrap_or("raw"),
+                str_param(&params, "factor_source").unwrap_or(""),
+            )
+        }
+        "research.note.get" | "research.note.history" => {
+            app.research_notes(&params, method.ends_with("history"))
+        }
+        "research.note.save" => app.save_research_note(&params),
+        "research.screen" => app.research_screen(&params),
         "system.version" => Ok(json!({
             "name": APP_NAME,
             "version": VERSION,
@@ -61,10 +85,16 @@ pub fn invoke(app: &App, method: &str, params: Value) -> Result<Value, AppError>
             let from = str_param(&params, "from");
             let to = str_param(&params, "to");
             let limit = u_param(&params, "limit").unwrap_or(500) as usize;
-            Ok(
-                serde_json::to_value(app.list_bars(&key, tf, from, to, limit)?)
-                    .unwrap_or(json!({})),
-            )
+            Ok(serde_json::to_value(app.list_bars_price(
+                &key,
+                tf,
+                from,
+                to,
+                limit,
+                str_param(&params, "basis").unwrap_or("raw"),
+                str_param(&params, "factor_source").unwrap_or(""),
+            )?)
+            .unwrap_or(json!({})))
         }
         "import.file" => {
             let path = str_param(&params, "path")

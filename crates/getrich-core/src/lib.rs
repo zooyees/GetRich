@@ -5,6 +5,8 @@
 //! `import`, read models in `view`, orchestration in `service`, JSON invoke
 //! in `invoke`.
 
+pub mod analysis;
+mod analysis_modes;
 pub mod bar_refresh;
 pub mod config;
 pub mod db;
@@ -20,6 +22,7 @@ pub mod market_map;
 mod market_sync;
 pub mod models;
 pub mod paths;
+pub mod professional;
 pub mod providers;
 pub mod pulse;
 pub mod read_model;
@@ -29,6 +32,7 @@ pub mod research;
 pub mod service;
 pub mod session;
 pub mod settings;
+pub mod storage;
 pub mod symbol;
 pub mod tushare;
 pub mod validation;

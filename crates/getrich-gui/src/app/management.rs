@@ -568,6 +568,11 @@ impl GetRichApp {
                 }
             });
         ui.add_space(10.0);
+        field_label(ui, "复权因子来源（只有一个来源时可留空）");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.preferences.adjustment_source)
+                .desired_width(360.0),
+        );
         field_label(ui, "行情列表宽度");
         ui.colored_label(muted(), "跟随窗口宽度的 20%；窄窗口使用单页布局");
         ui.add_space(6.0);
@@ -799,6 +804,12 @@ impl GetRichApp {
             ui.add_space(6.0);
         }
         ui.add_space(8.0);
+        if ui.button("创建本地数据库备份（后台执行）").clicked() {
+            self.submit_job("store.backup", json!({}));
+        }
+        ui.small(
+            "备份保存在数据目录的 backups 文件夹，完成路径见数据中心任务结果；配置文件请单独保管。",
+        );
         if ui.button("复制诊断信息").clicked() {
             ui.output_mut(|o| {
                 o.copied_text =

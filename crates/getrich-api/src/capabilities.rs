@@ -36,6 +36,14 @@ pub fn capabilities_json() -> Value {
             "style": "market-atlas-workstation"
         },
         "methods": [
+            {"method":"workbench.catalog","params":{}},
+            {"method":"workbench.execute","params":{"tool":"overview","values":{}}},
+            {"method":"stock.analysis","params":{"symbol":"600519","market":"CN.SH","as_of":"2026-10-30"}},
+            {"method":"research.screen","params":{"board":"CN","min_change_pct":2,"min_turnover":100000000}},
+            {"method":"research.note.get","params":{"symbol":"600519","market":"CN.SH"}},
+            {"method":"research.note.save","params":{"symbol":"600519","market":"CN.SH","revision":0,"thesis":"","risks":"","plan":"","review":""}},
+            {"method":"research.note.history","params":{"symbol":"600519","market":"CN.SH"}},
+            {"method":"job.submit","params":{"kind":"store.backup","params":{}}},
             {"method":"settings.get","params":{}},
             {"method":"settings.save","params":{"default_board":"ALL","preferences":{}}},
             {"method":"provider.capabilities","params":{}},

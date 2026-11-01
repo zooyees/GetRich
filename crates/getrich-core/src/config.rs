@@ -37,6 +37,9 @@ pub struct UiPreferences {
     pub columns: Vec<String>,
     pub recent: Vec<String>,
     pub moving_averages: Vec<usize>,
+    pub research_mode: String,
+    pub price_basis: String,
+    pub adjustment_source: String,
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -53,6 +56,9 @@ impl Default for UiPreferences {
             ],
             recent: Vec::new(),
             moving_averages: crate::indicators::MA_PERIODS.to_vec(),
+            research_mode: "swing".into(),
+            price_basis: "raw".into(),
+            adjustment_source: String::new(),
         }
     }
 }

@@ -96,5 +96,22 @@ async function waitJob(base,id){for(let i=0;i<150;i++){const job=await invoke(ba
     await invoke(a,'settings.save',{preferences:{moving_averages:[]}});assert.deepEqual((await api(a,'/v1/settings')).preferences.moving_averages,[]);
     const invalid=await fetch(a+'/v1/invoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'settings.save',params:{preferences:{moving_averages:[999]}}})});assert.equal(invalid.status,400);
   });
+  await check('professional local analysis and immutable journal reject stale versions',async()=>{
+    const report=await invoke(a,'stock.analysis',{symbol:'689999',market:'CN.SH',as_of:'2024-10-26'});assert.equal(report.sample_count,300);assert.ok(report.metrics.rsi14>99);assert.equal(report.price_basis,'raw_unadjusted');
+    const params={symbol:'689999',market:'CN.SH',revision:0,thesis:'review thesis',risks:'risk',plan:'observe',review:'',analysis_as_of:report.as_of};const saved=await invoke(a,'research.note.save',params);assert.equal(saved.revision,1);for(const [name,value] of Object.entries(report.metrics)){if(typeof value==='number')assert.ok(Math.abs(saved.analysis_snapshot.metrics[name]-value)<1e-10,name);else assert.equal(saved.analysis_snapshot.metrics[name],value);}
+    const stale=await fetch(a+'/v1/invoke',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({method:'research.note.save',params})});assert.equal(stale.status,400);assert.equal((await invoke(a,'research.note.history',params)).rows.length,1);
+  });
+  await check('local screen reports comparable sample and backup retains notebook',async()=>{
+    const screen=await invoke(a,'research.screen',{min_change_pct:0,min_turnover:0});assert.equal(screen.currency,'CNY');assert.ok(screen.rows.length<=100);for(const row of screen.rows){assert.equal(row.trade_date,screen.as_of);assert.equal(row.currency,'CNY');}
+    const job=await invoke(a,'job.submit',{kind:'store.backup',params:{}});const finished=await waitJob(a,job.id);assert.equal(finished.status,'succeeded');assert.equal(finished.result.integrity,'ok');assert.ok(fs.statSync(finished.result.path).size>0);
+  });
+  await check('three research styles expose different datasets and independent journal versions',async()=>{
+    for(const mode of ['intraday','value']){
+      const report=await invoke(a,'stock.analysis',{symbol:'689999',market:'CN.SH',mode,as_of:'2024-10-26'});assert.equal(report.mode,mode);assert.ok(Array.isArray(report.workspace.metrics));assert.ok(report.workspace.metrics.every(m=>m.value===null));
+      const p={symbol:'689999',market:'CN.SH',mode,revision:0,thesis:mode,risks:'',plan:'',review:'',analysis_as_of:report.evaluation_date};const saved=await invoke(a,'research.note.save',p);assert.equal(saved.revision,1);assert.equal(saved.analysis_snapshot.mode,mode);assert.equal((await invoke(a,'research.note.get',p)).thesis,mode);
+    }
+    assert.equal((await invoke(a,'research.note.get',{symbol:'689999',market:'CN.SH'})).thesis,'review thesis');
+    await invoke(a,'settings.save',{preferences:{research_mode:'value'}});assert.equal((await api(a,'/v1/settings')).preferences.research_mode,'value');
+  });
   fs.writeFileSync(path.join(root,'results.json'),JSON.stringify({root,results},null,2));console.log(JSON.stringify({root,passed:results.length}));
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{for(const c of controllers)c.abort();for(const child of children)child.kill();await sleep(300);});

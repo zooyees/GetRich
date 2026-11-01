@@ -24,7 +24,7 @@ export class Management{
     $("default-board").innerHTML=BOARDS.map(([id,label])=>`<option value="${id}">${label}</option>`).join("");$("default-board").value=data.default_board;
     const p=data.provider||{};this.renderProvider(p);
     $("provider-user").value=p.user_id||"";$("provider-token").placeholder=p.token_mask||"未配置";$("provider-enabled").checked=!!p.enabled;$("provider-poll").value=p.poll_ms||5000;$("provider-universe").value=p.universe||"full";$("provider-test").disabled=!p.configured;
-    const prefs=data.preferences||{};$("pref-theme").value=prefs.theme||"dark";$("pref-colors").value=prefs.colors||"red_up";$("pref-width").value=prefs.list_width||440;
+    const prefs=data.preferences||{};$("pref-factor-source").value=prefs.adjustment_source||"";$("pref-theme").value=prefs.theme||"dark";$("pref-colors").value=prefs.colors||"red_up";$("pref-width").value=prefs.list_width||440;
     $("pref-columns").innerHTML=[...new Set([...(prefs.columns||[]),...COLUMNS.map(c=>c[0])])].map(key=>{const label=COLUMNS.find(c=>c[0]===key)?.[1]||key;return `<div class="column-option"><label class="check"><input type="checkbox" value="${key}" ${["symbol","name"].includes(key)?"checked disabled":(prefs.columns||[]).includes(key)?"checked":""}>${label}</label><button type="button" data-column-up aria-label="前移 ${label}">↑</button><button type="button" data-column-down aria-label="后移 ${label}">↓</button></div>`;}).join("");
     this.renderWatch(data.watchlist||[]);
     $("recent-views").innerHTML=(prefs.recent||[]).map(value=>{const [market,symbol]=value.split(":");return `<button type="button" data-recent-market="${esc(market)}" data-recent-symbol="${esc(symbol)}">${esc(value)}</button>`;}).join("")||"暂无近期查看";
@@ -62,6 +62,7 @@ export class Management{
   bind(){
     const action=(element,event,handler)=>element.addEventListener(event,e=>{e.preventDefault();busy(e.submitter||e.currentTarget,()=>handler(e)).catch(()=>{});});
     action($("data-refresh"),"click",()=>this.loadData());
+    action($("store-backup"),"click",()=>this.submitJob("store.backup"));
     action($("import-form"),"submit",()=>this.previewImport());
     $("demo-import").onclick=()=>{this.upload=null;$("import-upload").value="";$("import-path").value="examples/demo.board.json";this.preview=null;$("import-preview").hidden=true;};
     $("import-path").oninput=()=>{this.upload=null;this.preview=null;$("import-preview").hidden=true;};
@@ -78,7 +79,7 @@ export class Management{
     $("pref-columns").onclick=e=>{const row=e.target.closest(".column-option");if(!row)return;if(e.target.hasAttribute("data-column-up")&&row.previousElementSibling)row.previousElementSibling.before(row);if(e.target.hasAttribute("data-column-down")&&row.nextElementSibling)row.nextElementSibling.after(row);};
     $("recent-views").onclick=e=>{const b=e.target.closest("[data-recent-market]");if(b)this.callbacks.openRecent(b.dataset.recentMarket,b.dataset.recentSymbol);};
     $("workspace-presets").onclick=e=>{const b=e.target.closest("[data-preset]");if(!b)return;busy(b,async()=>{await this.save({default_board:b.dataset.preset==="watch"?"WATCH":"ALL",preferences:{list_width:b.dataset.preset==="watch"?340:420}});await this.loadSettings();}).catch(()=>{});};
-    action($("preferences-form"),"submit",()=>this.save({preferences:{theme:$("pref-theme").value,colors:$("pref-colors").value,list_width:Number($("pref-width").value),columns:[...$("pref-columns").querySelectorAll("input:checked")].map(e=>e.value)}}));
+    action($("preferences-form"),"submit",()=>this.save({preferences:{adjustment_source:$("pref-factor-source").value,theme:$("pref-theme").value,colors:$("pref-colors").value,list_width:Number($("pref-width").value),columns:[...$("pref-columns").querySelectorAll("input:checked")].map(e=>e.value)}}));
     action($("watch-form"),"submit",async()=>{await invoke("watch.set",{symbol:$("watch-symbol").value.trim(),market:$("watch-market").value,name:$("watch-name").value.trim()||null,watched:true});await this.loadSettings();});
     $("watch-edit").onclick=e=>{const button=e.target.closest("button");if(!button)return;busy(button,async()=>{if(button.dataset.remove)await invoke("watch.set",{symbol:button.dataset.remove,market:button.dataset.market,watched:false});else await invoke("watch.move",{symbol:button.dataset.symbol,market:button.dataset.market,direction:Number(button.dataset.move)});await this.loadSettings();}).catch(()=>{});};
     action($("watch-import-btn"),"click",async()=>{await invoke("watch.import",{watchlist:JSON.parse($("watch-import").value)});await this.loadSettings();});

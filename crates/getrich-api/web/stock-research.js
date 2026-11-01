@@ -1,4 +1,5 @@
 import {$,esc,fmt,amount,time,api,invoke,statusZh} from "/runtime.js";
+import {AnalysisWorkspace} from '/analysis-workspace.js';
 
 const groups={history:["history"],intraday:["intraday"],f10:["valuation","company","financial","holders"],funds:["funds"],announcements:["announcements"]};
 export const safeLink=value=>{try{const url=new URL(value);return ["http:","https:"].includes(url.protocol)&&!url.username&&!url.password?url.href:null;}catch{return null;}};
@@ -7,16 +8,18 @@ const metric=(name,value)=>`<div><dt>${esc(name)}</dt><dd>${esc(value)}</dd></di
 const note=data=>`${data?.error?`<p class="error">${esc(data.error)}${data.rows?.length?"；以下保留上次成功数据。":""}</p>`:""}<p class="microcopy">${esc(data?.source||"Tushare")} · 数据日期 ${esc(data?.as_of||"—")} · 获取 ${esc(data?.updated_at?time(data.updated_at):"尚未获取")}</p>`;
 const active=job=>["queued","running","cancelling"].includes(job?.status);
 export class StockResearch {
-  constructor({current,configured,reload,isActive}){
+  constructor({current,configured,reload,isActive,preferences=()=>({})}){
     this.current=current;this.configured=configured;this.reload=reload;this.isActive=isActive;this.key="";this.tab="history";this.intraday=false;this.data={};this.attempted=new Set();this.jobs=new Map();this.pending=new Set();this.errors=new Map();this.generation=0;
+    this.analysis=new AnalysisWorkspace({current,preferences,active:()=>this.isActive()&&this.tab==='analysis',modeChanged:()=>this.ensure(this.analysisSource())});
     $("research-tabs").onclick=event=>{const tab=event.target.closest("[data-research]")?.dataset.research;if(!tab)return;this.tab=tab;this.render();this.ensure(tab).catch(e=>this.fail(tab,e));};
     $("research-refresh").onclick=()=>{if(!this.configured()){location.hash="#/settings";return;}this.ensure(this.section(),true).catch(e=>this.fail(this.section(),e));};
-    setInterval(()=>{if(this.isActive()&&this.section()==="intraday")this.update();},30000);
+    setInterval(()=>{if(this.isActive()&&['intraday','analysis'].includes(this.section()))this.update();},30000);
     new ResizeObserver(()=>this.draw()).observe($("intraday-canvas"));
     $("intraday-canvas").onpointermove=event=>{const rect=event.target.getBoundingClientRect();this.hover=(event.clientX-rect.left-60)/(rect.width-120)*240;this.draw();};
     $("intraday-canvas").onpointerleave=()=>{this.hover=null;this.draw();};
   }
   section(){return this.tab==="history"&&this.intraday?"intraday":this.tab;}
+  analysisSource(){return this.analysis.mode==='intraday'?'intraday':this.analysis.mode==='value'?'f10':'history';}
   id(section){return this.key+":"+section;}
   fail(section,error){this.errors.set(this.id(section),error.message);this.render();}
   async update(force=false){
@@ -30,6 +33,7 @@ export class StockResearch {
     catch(e){if(generation===this.generation)this.fail(this.section(),e);}
   }
   async ensure(section,force=false){
+    if(section==='analysis'){await this.analysis.load();return this.ensure(this.analysisSource(),force);}
     const quote=this.current();if(!quote||!this.isActive()||!quote.market.startsWith("CN.")||!this.configured())return;
     const id=this.id(section);if(this.pending.has(id)||active(this.jobs.get(id)))return;
     const needs=groups[section]?.some(name=>this.data.datasets?.[name]?.needs_refresh);
@@ -51,16 +55,17 @@ export class StockResearch {
   setIntraday(value){this.intraday=value;this.tab="history";this.render();if(value)this.ensure("intraday").catch(e=>this.fail("intraday",e));}
   render(){
     if(!this.isActive()||!this.current())return;
-    const section=this.section(),id=this.id(section),job=this.jobs.get(id),pending=this.pending.has(id)||active(job);
+    const section=this.section(),id=this.id(section==='analysis'?this.analysisSource():section),job=this.jobs.get(id),pending=this.pending.has(id)||active(job);
     $("research-tabs").querySelectorAll("button").forEach(button=>{const selected=button.dataset.research===this.tab;button.setAttribute("aria-selected",String(selected));button.classList.toggle("active",selected);});
     $("candle-panel").hidden=this.tab!=="history"||this.intraday;$("intraday-panel").hidden=section!=="intraday";$("research-panel").hidden=this.tab==="history";
     $("tf-tabs").hidden=this.tab!=="history";$("chart-readout").hidden=section!=="history";$("ma-controls").hidden=section!=="history";$("chart-actions").hidden=section!=="history";
-    $("research-refresh").disabled=pending;$("research-refresh").textContent=!this.configured()?"配置数据源":section==="history"?"更新完整历史":"刷新数据";
+    $("research-refresh").hidden=false;$("research-refresh").disabled=pending;$("research-refresh").textContent=!this.configured()?"配置数据源":section==='analysis'?"更新研究数据":section==="history"?"更新完整历史":"刷新数据";
     const message=this.errors.get(id)||job?.error||job?.result?.warnings?.join("；")||(pending?`${statusZh(job?.status||"queued")} ${job?.phase||"正在提交"}`:"");
     $("research-status").hidden=!message;$("research-status").textContent=message;$("research-status").className=job?.error||this.errors.has(id)?"error":"muted";
     const ds=this.data.datasets||{};
     if(section==="intraday"){$("intraday-note").innerHTML=note(ds.intraday);this.draw();}
     if(this.tab==="f10")this.renderF10(ds);
+    if(this.tab==='analysis')this.analysis.render();
     if(this.tab==="funds")this.renderFunds(ds.funds);
     if(this.tab==="announcements")this.renderAnnouncements(ds.announcements);
     if(section==="history"){$("history-range").title=`${ds.history?.source||"Tushare"} · 数据日期 ${ds.history?.as_of||"—"} · 获取 ${ds.history?.updated_at?time(ds.history.updated_at):"尚未获取"}`;$("chart-range").title=$("history-range").title;$("history-range").innerHTML=ds.history?.error?`<p class="error">${esc(ds.history.error)}</p>`:"";}

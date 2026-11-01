@@ -88,6 +88,9 @@ impl GetRichApp {
             return;
         }
         for event in self.core.events.replay_since(self.live.seq) {
+            if event["type"] == "professional.alert" {
+                self.workbench.badge_tick = None;
+            }
             if matches!(
                 event["type"].as_str(),
                 Some("quote.updated" | "ingest.done" | "settings.changed")
@@ -175,7 +178,9 @@ impl GetRichApp {
             return;
         };
         let tf = self.tf;
-        let from = if full {
+        let basis = self.preferences.price_basis.clone();
+        let source = self.preferences.adjustment_source.clone();
+        let from = if full || basis != "raw" {
             None
         } else {
             self.bars
@@ -191,7 +196,7 @@ impl GetRichApp {
         if let Err(error) = self
             .controller
             .submit_background("read:stock", move |core| {
-                core.list_bars(&key, tf, from.as_deref(), None, 20000)
+                core.list_bars_price(&key, tf, from.as_deref(), None, 20000, &basis, &source)
                     .map(|bars| Payload::Bars(key, bars, from))
                     .map_err(|e| e.to_string())
             })

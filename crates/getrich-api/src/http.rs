@@ -24,6 +24,8 @@ const CHART_JS: &str = include_str!("../web/chart.js");
 const BAR_REFRESH_JS: &str = include_str!("../web/bar-refresh.js");
 const WATCH_SEARCH_JS: &str = include_str!("../web/watch-search.js");
 const STOCK_RESEARCH_JS: &str = include_str!("../web/stock-research.js");
+const WORKBENCH_JS: &str = include_str!("../web/workbench.js");
+const ANALYSIS_JS: &str = include_str!("../web/analysis-workspace.js");
 const MANAGEMENT_JS: &str = include_str!("../web/management.js");
 const PULSE_JS: &str = include_str!("../web/pulse.js");
 const MARKET_MAP_JS: &str = include_str!("../web/market-map.js");
@@ -131,6 +133,16 @@ fn handle_request(mut request: Request, app: &App, running: &AtomicBool) -> Resu
             request,
             "application/javascript; charset=utf-8",
             STOCK_RESEARCH_JS.as_bytes(),
+        ),
+        (Method::Get, "/workbench.js") => respond_bytes(
+            request,
+            "application/javascript; charset=utf-8",
+            WORKBENCH_JS.as_bytes(),
+        ),
+        (Method::Get, "/analysis-workspace.js") => respond_bytes(
+            request,
+            "text/javascript; charset=utf-8",
+            ANALYSIS_JS.as_bytes(),
         ),
         (Method::Get, "/bar-refresh.js") => respond_bytes(
             request,
@@ -358,6 +370,8 @@ fn stock_get(request: Request, app: &App, path: &str, query: &str) -> Result<(),
             "market": market,
             "symbol": symbol,
             "timeframe": qparam(query, "timeframe").unwrap_or_else(|| "1d".into()),
+            "basis":qparam(query,"basis").unwrap_or_else(||"raw".into()),
+            "factor_source":qparam(query,"factor_source").unwrap_or_default(),
             "from": qparam(query, "from").unwrap_or_default(),
             "to": qparam(query, "to").unwrap_or_default(),
             "limit": qparam(query, "limit").and_then(|s| s.parse::<u64>().ok()).unwrap_or(500),

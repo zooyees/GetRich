@@ -22,6 +22,7 @@ pub fn start(app: &Arc<App>) {
     if app.jobs.started.swap(true, Ordering::SeqCst) {
         return;
     }
+    crate::professional::start(app);
     let worker = Arc::clone(app);
     if let Err(error) = std::thread::Builder::new()
         .name("getrich-jobs".into())
@@ -49,6 +50,10 @@ impl App {
             "market.sync",
             "tushare.bars",
             "stock.research",
+            "store.backup",
+            "professional.sync",
+            "professional.backtest",
+            "professional.replay",
             "tushare.valuations",
             "tushare.indices",
             "provider.test",
@@ -254,6 +259,19 @@ fn execute(app: &App, id: i64, kind: &str, parameters: &str) -> Result<Value, Ap
                 .map_err(|e| AppError::Message(e.to_string()))
         }
         "stock.research" => crate::research::execute(app, id, &p),
+        "professional.sync" => crate::professional::sync(app, id, &p),
+        "professional.backtest" => {
+            stage(app, id, "冻结输入并计算策略", 20)?;
+            crate::professional::run_backtest(app, &p)
+        }
+        "professional.replay" => {
+            stage(app, id, "重放冻结的输入快照", 20)?;
+            crate::professional::replay_backtest(app, &p)
+        }
+        "store.backup" => {
+            stage(app, id, "创建数据库一致快照", 20)?;
+            app.backup_store()
+        }
         "tushare.bars" => {
             let mut p = p;
             p["section"] = json!("history");

@@ -5,6 +5,7 @@ import {Management,BOARDS,COLUMNS} from "/management.js";
 import {renderPulse} from "/pulse.js";
 import {MarketMap} from "/market-map.js";
 import {StockResearch} from "/stock-research.js";
+import {Workbench} from "/workbench.js";
 
 const state={view:"quotes",board:"ALL",query:"",sort:"symbol",industry:"",change_filter:"",offset:0,rows:[],matched:0,selectedKey:null,detail:null,bars:[],barMeta:{},tf:"1d",stats:null,preferences:{},snapshot:null,loading:false};
 const reads=new Reads();const chart=new Chart($("kline"),$("kline-meta"),{controls:$("ma-controls"),onToggle:periods=>{state.preferences.moving_averages=periods;guard(invoke("settings.save",{preferences:{moving_averages:periods}}));}});
@@ -26,7 +27,7 @@ const management=new Management({
     guard(api("/v1/stats").then(updateStats));
   },
 });
-const stockResearch=new StockResearch({current:()=>state.detail?.quote,configured:()=>!!management.settings?.provider?.configured,isActive:()=>state.view==="quotes",reload:()=>state.detail?loadStock(state.detail.quote,routeGeneration,true):Promise.resolve()});
+const stockResearch=new StockResearch({preferences:()=>state.preferences,current:()=>state.detail?.quote,configured:()=>!!management.settings?.provider?.configured,isActive:()=>state.view==="quotes",reload:()=>state.detail?loadStock(state.detail.quote,routeGeneration,true):Promise.resolve()});
 function quoteHash(changes={}){
   const values={board:state.board,q:state.query,sort:state.sort,industry:state.industry,change_filter:state.change_filter,offset:state.offset,...changes};
   const query=new URLSearchParams();for(const [name,value] of Object.entries(values))if(value!==""&&value!=null)query.set(name,String(value));
@@ -52,10 +53,16 @@ function renderBoards(){
   $("change-filter").value=state.change_filter;
   $("industry-filter").textContent=state.industry?"行业："+state.industry:"";
 }
+const professionalWorkbench=new Workbench({active:()=>state.view==='workbench',openStock:row=>{location.hash=stockHash(row);},openResearch:async request=>{
+  const id=request.market+':'+request.symbol+':'+request.mode;
+  if(stockResearch.analysis.drafts.get(id)?._dirty)throw new Error('该股票已有未保存草稿，请先保存或放弃，再应用模板');
+  state.researchOpen=request;const hash=stockHash(request);
+  if(location.hash===hash)await route();else location.hash=hash;
+}});
 function showPage(view){
   if(state.view==="pulse"&&view!=="pulse")marketMap.deactivate();
   state.view=view;$("workspace").hidden=view!=="quotes";
-  for(const page of ["pulse","data","settings"])$("view-"+page).hidden=view!==page;
+  for(const page of ["pulse","data","settings","workbench"])$("view-"+page).hidden=view!==page;
   document.querySelectorAll(".nav a").forEach(a=>{const selected=a.dataset.route===(view==="quotes"?"quotes":view);a.classList.toggle("active",selected);if(selected)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");});
   $("search-wrap").hidden=view!=="quotes";
 }
@@ -64,6 +71,7 @@ async function route(){
   let path,params;try{const hash=location.hash||"#/quotes";const index=hash.indexOf("?");path=index<0?hash:hash.slice(0,index);params=new URLSearchParams(index<0?"":hash.slice(index+1));}catch{location.hash="#/quotes";return;}
   clearTimeout(searchTimer);
   if(path==="#/pulse"){showPage("pulse");await Promise.all([loadPulse(generation),marketMap.refresh()]);return;}
+  if(path==="#/workbench"){showPage("workbench");await professionalWorkbench.load();return;}
   if(path==="#/data"){showPage("data");await management.loadData();return;}
   if(path==="#/settings"){showPage("settings");await management.loadSettings();return;}
   const stock=path.match(/^#\/stock\/([^/]+)\/([^/?]+)$/);
@@ -107,7 +115,7 @@ function renderList(){
 }
 function renderSelection(){for(const row of $("quote-body").rows){const selected=row.dataset.key===state.selectedKey;row.classList.toggle("selected",selected);row.setAttribute("aria-selected",String(selected));}}
 function loadStock(row,generation,passive=false){
-  const id=key(row)+":"+state.tf;
+  const id=key(row)+":"+state.tf+":"+(state.preferences.price_basis||"raw");
   if(passive&&stockRead?.id===id&&stockRead.generation===generation)return stockRead.promise;
   const entry={id,generation};entry.promise=readStock(row,generation,passive).finally(()=>{if(stockRead===entry)stockRead=null;});stockRead=entry;return entry.promise;
 }
@@ -116,17 +124,24 @@ async function readStock(row,generation,passive=false){
   if(!passive){$("detail-content").hidden=true;$("detail-flash").hidden=false;$("detail-flash").textContent="正在载入详情…";}
   try{
     const prefix=`/v1/stocks/${encodeURIComponent(row.market)}/${encodeURIComponent(row.symbol)}`;
-    const tf=state.tf;
+    const tf=state.tf,basis=state.preferences.price_basis||"raw",factorSource=state.preferences.adjustment_source||"";
     const same=key(state.detail?.quote)===selected&&state.barMeta.timeframe===tf&&state.bars.length>0;
-    const from=passive&&same&&!fullBarsNeeded?tailFrom(tf,state.bars.at(-1)?.ts):null;
+    const from=basis==="raw"&&passive&&same&&!fullBarsNeeded?tailFrom(tf,state.bars.at(-1)?.ts):null;
     fullReload=!from;fullBarsNeeded=false;
     const detail=await reads.get("detail",prefix);
     if(!isCurrent(generation)||request!==detailGeneration||state.selectedKey!==selected)return;
     const changed=key(state.detail?.quote)!==key(detail.quote);
     state.detail=detail;renderDetail(false,"",true);
-    const bars=await reads.get("bars",prefix+`/bars?timeframe=${tf}&limit=20000${from?"&from="+encodeURIComponent(from):""}`);
+    const bars=await reads.get("bars",prefix+`/bars?timeframe=${tf}&basis=${basis}&factor_source=${encodeURIComponent(factorSource)}&limit=20000${from?"&from="+encodeURIComponent(from):""}`);
     if(!isCurrent(generation)||request!==detailGeneration||state.selectedKey!==selected)return;
     state.detail=detail;if(from){const merged=mergeTail(state.barMeta,state.bars,bars,from);state.barMeta=merged.meta;state.bars=merged.rows;}else{state.barMeta=bars;state.bars=bars.rows||[];}renderDetail(!passive,bars.empty_message);
+    if(state.researchOpen&&state.researchOpen.symbol===row.symbol&&state.researchOpen.market===row.market){
+      const request=state.researchOpen;delete state.researchOpen;
+      stockResearch.analysis.mode=request.mode;stockResearch.analysis.userModeChosen=true;
+      stockResearch.analysis.drafts.set(request.market+':'+request.symbol+':'+request.mode,request.draft);
+      stockResearch.tab='analysis';stockResearch.render();
+      guard(stockResearch.ensure('analysis'));
+    }
     guard(stockResearch.update());
     if(changed&&!passive)guard(invoke("history.view",{symbol:row.symbol,market:row.market}));
   }catch(error){if(fullReload)fullBarsNeeded=true;if(error.name==="AbortError")return;if(request!==detailGeneration)return;$("detail-flash").hidden=false;$("detail-flash").textContent="详情读取失败："+error.message;throw error;}
@@ -144,7 +159,8 @@ function renderDetail(reset=false,message="",quoteOnly=false){
   const listing=detail.listing||{};$("profile-dl").innerHTML=[["行业",listing.industry||listing.sector||"—"],["交易所",listing.exchange||"—"],["上市日",listing.listing_date||"—"],["状态",listing.status||"—"],["接收时间",time(q.received_at,q.market)],["报价类型",q.source_kind||"—"],...(detail.metadata||[]).map(m=>[m.key,m.value])].map(([a,b])=>gridItem(a,b)).join("");
   $("tf-tabs").querySelectorAll("button").forEach(button=>{const selected=stockResearch.intraday?button.dataset.tf==="intraday":button.dataset.tf===state.tf;button.setAttribute("aria-selected",String(selected));button.classList.toggle("active",selected);});
   $("period-note").textContent=state.barMeta.partial_last_period?"最新周/月周期仍在进行，以已导入日线为准":"";
-  $("chart-range").textContent=`${state.barMeta.from||"—"} — ${state.barMeta.to||"—"} · ${state.barMeta.count??state.bars.length} 根 · 原始价格 / 未复权`;
+  $("chart-range").textContent=`${state.barMeta.from||"—"} — ${state.barMeta.to||"—"} · ${state.barMeta.count??state.bars.length} 根 · ${{raw:"原始价格 / 未复权",qfq:"前复权",hfq:"后复权"}[state.barMeta.price_basis||"raw"]}`;
+  $("price-basis").value=state.preferences.price_basis||"raw";
   if(!quoteOnly)chart.setData(state.bars,{reset,message:message||"暂无该周期 K 线",movingAverages:state.barMeta.moving_averages,periods:state.preferences.moving_averages,timeframe:state.tf});
   if(!quoteOnly)$("bars-table").innerHTML=state.bars.slice(-200).map(b=>`<tr><td>${esc(b.ts)}</td><td>${fmt(b.open)}</td><td>${fmt(b.high)}</td><td>${fmt(b.low)}</td><td>${fmt(b.close)}</td></tr>`).join("");
   $("pull-history").hidden=!String(q.market).startsWith("CN.")||!management.settings?.provider?.configured;
@@ -163,7 +179,10 @@ function scheduleRefresh(){
   if(eventTimer)return;const generation=routeGeneration;
   eventTimer=setTimeout(()=>{eventTimer=0;if(generation!==routeGeneration)return;if(state.view==="quotes")guard(loadBoard(generation,true));if(state.view==="pulse"){guard(loadPulse(generation));guard(marketMap.refresh());}if(state.view==="data")guard(management.loadData());},400);
 }
+let lastAlert=0;
+async function refreshAlertBadge(){const b=await invoke("workbench.execute",{tool:"alerts.badge",values:{}});const count=b.unread||0;$("workbench-nav").textContent="专业工作台"+(count?" · "+count:"");if((b.latest_id||0)>lastAlert){toast(`有 ${count} 条未读预警，可在专业工作台查看`);lastAlert=b.latest_id;} }
 const events=new Events(async event=>{
+  if(event.type==="professional.alert"){guard(refreshAlertBadge());if(state.view==="workbench"&&professionalWorkbench.tool==="alerts.list")guard(professionalWorkbench.execute("alerts.list",true));return;}
   if(["job.updated"].includes(event.type)){guard(management.loadJobs());return;}
   if(event.type==="ingest.done"||event.type==="resync_required")fullBarsNeeded=true;
   if(event.type==="settings.changed"){
@@ -180,6 +199,7 @@ function bind(){
   $("quote-body").onclick=event=>{const tr=event.target.closest("[data-key]");const row=state.rows.find(row=>key(row)===tr?.dataset.key);if(row)location.hash=stockHash(row);};
   $("quote-body").onkeydown=event=>{if(event.key==="Enter"){const tr=event.target.closest("[data-key]");const row=state.rows.find(row=>key(row)===tr?.dataset.key);if(row)location.hash=stockHash(row);}};
   $("page-prev").onclick=()=>navigate({offset:Math.max(0,state.offset-200)});$("page-next").onclick=()=>navigate({offset:state.offset+200});
+  $("price-basis").onchange=()=>{state.preferences.price_basis=$("price-basis").value;guard(invoke("settings.save",{preferences:{price_basis:state.preferences.price_basis}}));state.bars=[];state.barMeta={};fullBarsNeeded=true;chart.setData([],{reset:true,message:"正在读取所选价格口径…"});if(state.detail)guard(loadStock(state.detail.quote,routeGeneration));};
   $("tf-tabs").onclick=event=>{const tf=event.target.closest("[data-tf]")?.dataset.tf;if(!tf||!state.detail)return;stockResearch.setIntraday(tf==="intraday");if(tf==="intraday"){renderDetail();return;}state.tf=tf;guard(loadStock(state.detail.quote,routeGeneration));};
   $("watch-btn").onclick=()=>guard(busy($("watch-btn"),async()=>{const d=state.detail;if(!d)return;const result=await invoke("watch.set",{symbol:d.quote.symbol,market:d.quote.market,name:d.quote.name,watched:!d.watched});if(state.detail&&key(state.detail.quote)===key(d.quote)){state.detail.watched=result.watched;renderDetail();}if(state.board==="WATCH")await loadBoard(routeGeneration,true);toast(result.watched?"已加入自选":"已移除自选");}));
   $("pulse-refresh").onclick=()=>guard(marketMap.sync());
@@ -214,6 +234,6 @@ async function health(){
 }
 bind();
 try{const settings=await management.initialize();state.board=settings.default_board||"ALL";}catch(error){toast("设置初始化失败："+error.message,true);}
-await guard(route());events.start();guard(health());
+await guard(route());events.start();guard(health());guard(refreshAlertBadge());
 setInterval(()=>{if(document.hidden)return;if(state.view==="pulse"){guard(loadPulse(routeGeneration));guard(marketMap.refresh());}if(state.view==="quotes")guard(loadBoard(routeGeneration,true));if(state.view==="data")guard(management.loadJobs());if(state.view==="settings")guard(management.refreshProvider());},5000);
-setInterval(()=>{if(!document.hidden)guard(health());},15000);
+setInterval(()=>{if(!document.hidden){guard(health());guard(refreshAlertBadge());}},15000);

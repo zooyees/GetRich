@@ -233,6 +233,12 @@ impl App {
                 }
                 cfg.preferences.moving_averages.sort_unstable();
                 cfg.preferences.moving_averages.dedup();
+                crate::analysis::research_mode(Some(&cfg.preferences.research_mode))?;
+                if !["raw", "qfq", "hfq"].contains(&cfg.preferences.price_basis.as_str())
+                    || cfg.preferences.adjustment_source.chars().count() > 100
+                {
+                    return Err(AppError::InvalidArg("复权口径或来源无效".into()));
+                }
             }
             Ok(())
         })?;

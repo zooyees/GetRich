@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn local_analysis_preserves_drafts_and_renders_at_small_and_large_sizes() {
+    let (mut app, root) = workspace();
+    app.navigate_stock("600519", "CN.SH");
+    app.stock.tab = 4;
+    app.read_research();
+    for _ in 0..400 {
+        app.apply_io();
+        if app.detail.is_some() && app.stock.data["analysis"]["symbol"] == "600519" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.stock.data["analysis"]["symbol"], "600519");
+    let id = "CN.SH:600519:swing".to_string();
+    let mut draft = app.stock.data["analysis"]["note"].clone();
+    draft["thesis"] = json!("未保存的研究假设");
+    draft["_dirty"] = json!(true);
+    app.stock.drafts.insert(id.clone(), draft);
+    app.read_research();
+    for _ in 0..200 {
+        app.apply_io();
+        if !app.controller.is_pending("read:research") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.stock.drafts[&id]["thesis"], "未保存的研究假设");
+    // Force a mode switch while an older analysis is queued. Each style keeps its draft.
+    for mode in ["intraday", "value", "swing"] {
+        app.select_research_mode(mode);
+        for _ in 0..400 {
+            app.apply_io();
+            if app.stock.data["analysis"]["mode"] == mode && !app.loading {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(app.stock.data["analysis"]["mode"], mode);
+        assert_eq!(app.preferences.research_mode, mode);
+        assert_eq!(app.stock.drafts[&id]["thesis"], "未保存的研究假设");
+    }
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    GetRichApp::install_theme(&ctx);
+    for size in [Vec2::new(1024.0, 768.0), Vec2::new(1920.0, 1080.0)] {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                ..Default::default()
+            },
+            |ctx| {
+                app.ui_navigation(ctx);
+                app.ui_quotes(ctx);
+            },
+        );
+        assert!(output.shapes.iter().any(
+            |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains("RSI14"))
+        ));
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn pinned_stock_outside_the_board_refreshes_quotes_and_tail_without_resetting_the_workspace() {
     let (mut app, root) = workspace();
     let initial_stats = app.core.stats().unwrap();

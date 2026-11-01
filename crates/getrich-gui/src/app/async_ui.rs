@@ -171,10 +171,12 @@ impl GetRichApp {
             self.screen = Screen::Detail;
         }
         let tf = self.tf;
+        let basis = self.preferences.price_basis.clone();
+        let source = self.preferences.adjustment_source.clone();
         if let Err(e) = self.controller.submit("read:stock", move |core| {
             let detail = core.show_stock(&key).map_err(|e| e.to_string())?;
             let bars = core
-                .list_bars(&key, tf, None, None, 20000)
+                .list_bars_price(&key, tf, None, None, 20000, &basis, &source)
                 .map_err(|e| e.to_string())?;
             if let Err(error) = core.record_view(&key.symbol, Some(key.market.as_str())) {
                 tracing::debug!(%error,"保存近期查看失败");
@@ -267,6 +269,9 @@ impl GetRichApp {
                         self.fail_map(error);
                         continue;
                     }
+                    if let Some(tool) = reply.tag.strip_prefix("action:workbench:") {
+                        self.workbench.errors.insert(tool.into(), error.clone());
+                    }
                     self.error = Some(error);
                     self.loading = false;
                     self.detail_loading = false;
@@ -283,8 +288,76 @@ impl GetRichApp {
                         self.watch_search.error = None;
                     }
                 }
+                Ok(Payload::NotebookHistory(key, value)) => {
+                    self.stock.histories.insert(
+                        format!(
+                            "{}:{}:{}",
+                            key.market.as_str(),
+                            key.symbol,
+                            value["mode"].as_str().unwrap_or("swing")
+                        ),
+                        value,
+                    );
+                }
+                Ok(Payload::Notebook(key, value)) => {
+                    if self.pending_key.as_ref() == Some(&key)
+                        && value["mode"].as_str() == Some(self.preferences.research_mode.as_str())
+                    {
+                        self.stock.data["analysis"]["note"] = value.clone();
+                    }
+                    self.stock.drafts.insert(
+                        format!(
+                            "{}:{}:{}",
+                            key.market.as_str(),
+                            key.symbol,
+                            value["mode"].as_str().unwrap_or("swing")
+                        ),
+                        value,
+                    );
+                    self.ui_notice =
+                        Some(("研究记录已保存；历史版本已保留".into(), Instant::now()));
+                }
+                Ok(Payload::Screen(value)) => self.stock.screen = value,
+                Ok(Payload::Workbench(tool, value)) => {
+                    if let Some(target) = tool.strip_prefix("file:") {
+                        if value.is_object() {
+                            self.workbench
+                                .forms
+                                .entry(target.into())
+                                .or_insert(json!({}))["csv"] = value["csv"].clone();
+                        }
+                    } else {
+                        if value["job_finished"] == true {
+                            self.workbench.jobs.remove(&tool);
+                            self.workbench.results.remove(&format!("progress:{tool}"));
+                        }
+                        self.apply_workbench(tool, value);
+                    }
+                }
                 Ok(Payload::Research(key, value)) => {
                     if self.pending_key.as_ref() == Some(&key) {
+                        if value["analysis"]["mode"]
+                            .as_str()
+                            .is_some_and(|mode| mode != self.preferences.research_mode)
+                        {
+                            self.read_research();
+                            continue;
+                        }
+                        if value["analysis"]["note"]["revision"].is_number() {
+                            let id = format!(
+                                "{}:{}:{}",
+                                key.market.as_str(),
+                                key.symbol,
+                                value["analysis"]["mode"].as_str().unwrap_or("swing")
+                            );
+                            let incoming = &value["analysis"]["note"];
+                            if self.stock.drafts.get(&id).is_none_or(|old| {
+                                old["_dirty"] != true
+                                    && incoming["revision"].as_i64() >= old["revision"].as_i64()
+                            }) {
+                                self.stock.drafts.insert(id, incoming.clone());
+                            }
+                        }
                         self.stock.key = format!("{}:{}", key.market.as_str(), key.symbol);
                         self.stock.data = value;
                     }
@@ -387,7 +460,10 @@ impl GetRichApp {
                     self.jobs_cache = value;
                 }
                 Ok(Payload::Action(purpose, value)) => {
-                    if purpose == "ma-preferences" {
+                    if purpose == "ma-preferences" || purpose == "research-mode" {
+                        if purpose == "research-mode" {
+                            self.loading = false;
+                        }
                         self.settings_cache = value;
                         continue;
                     }

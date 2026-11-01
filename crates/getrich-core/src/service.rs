@@ -767,6 +767,8 @@ impl App {
             let conn: &Connection = &tx;
             let Some(listing) = db::get_listing(conn, key)? else {
                 return Ok(BarPage {
+                    price_basis: "raw".into(),
+                    adjustment: serde_json::Value::Null,
                     moving_averages: Vec::new(),
                     basis_timeframe: timeframe.as_str().into(),
                     partial_last_period: false,
@@ -817,6 +819,8 @@ impl App {
                 ))
             };
             Ok(BarPage {
+                price_basis: "raw".into(),
+                adjustment: serde_json::Value::Null,
                 moving_averages: crate::indicators::daily_averages(&daily, &rows),
                 basis_timeframe: basis_timeframe.into(),
                 partial_last_period: rows

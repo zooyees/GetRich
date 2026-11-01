@@ -3,6 +3,60 @@ use super::*;
 use getrich_core::import::{parse_json, ImportKind};
 
 #[test]
+fn professional_forms_layout_and_drafts_survive_all_groups_and_window_sizes() {
+    let (mut app, root) = super::interaction_tests::workspace();
+    app.workbench.catalog =
+        getrich_core::professional::execute(&app.core, "catalog", &json!({})).unwrap();
+    let tools = app.workbench.catalog["tools"].as_array().unwrap().clone();
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    GetRichApp::install_theme(&ctx);
+    app.screen = Screen::Workbench;
+    for size in [
+        Vec2::new(760.0, 600.0),
+        Vec2::new(1024.0, 768.0),
+        Vec2::new(1920.0, 1080.0),
+    ] {
+        for tool in &tools {
+            app.workbench.tool = tool["id"].as_str().unwrap().into();
+            app.workbench.group = tool["group"].as_str().unwrap().into();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.ui_navigation(ctx);
+                    app.ui_workbench(ctx);
+                },
+            );
+            assert!(!output.shapes.is_empty());
+        }
+    }
+    app.workbench.forms.insert(
+        "pool.save".into(),
+        json!({"name":"待保存研究池","members":"CN.SH:600519","revision":0}),
+    );
+    let draft = app.workbench.forms["pool.save"].clone();
+    app.run_workbench("pool.save", draft);
+    for _ in 0..300 {
+        app.apply_io();
+        if app.workbench.results.contains_key("pool.save") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.workbench.forms["pool.save"]["revision"], 1);
+    assert_eq!(app.workbench.forms["pool.save"]["name"], "待保存研究池");
+    let result = app.workbench.results["pool.save"].clone();
+    app.workbench.results.insert("overview".into(), result);
+    app.workbench.tool = "overview".into();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.ui_workbench(ctx));
+    drop(app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn full_market_pagination_stays_visible_in_the_one_fifth_sidebar() {
     let (mut app, root) = super::interaction_tests::workspace();
     let mut page = app

@@ -18,6 +18,10 @@ pub enum Payload {
     Quote(Box<StockDetail>),
     Bars(getrich_core::models::InstrumentKey, BarPage, Option<String>),
     Research(getrich_core::models::InstrumentKey, Value),
+    Notebook(getrich_core::models::InstrumentKey, Value),
+    NotebookHistory(getrich_core::models::InstrumentKey, Value),
+    Screen(Value),
+    Workbench(String, Value),
     Stats(StoreStats),
     Settings(Value),
     Provider(Value),
@@ -148,7 +152,17 @@ impl Controller {
         let generation = generations.get(tag).copied().unwrap_or(0) + 1;
         let sender = if tag.starts_with("action:") {
             &self.action_sender
-        } else if ["read:map", "read:stock", "read:research", "read:stats"].contains(&tag) {
+        } else if tag.starts_with("read:workbench")
+            || [
+                "read:map",
+                "read:stock",
+                "read:research",
+                "read:stats",
+                "read:screen",
+                "read:note-history",
+            ]
+            .contains(&tag)
+        {
             &self.data_sender
         } else {
             &self.sender

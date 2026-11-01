@@ -1,6 +1,7 @@
 //! Quote board in egui: dense Tonghuashun table, Apple chrome.
 
 use eframe::egui::{self, Color32, Margin, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
+mod analysis_panel;
 mod async_ui;
 mod design;
 mod detail_workspace;
@@ -16,6 +17,7 @@ mod market_map;
 mod quote_sidebar;
 mod stock_research;
 mod watch_search;
+mod workbench;
 use crate::controller::Controller;
 use getrich_core::models::{InstrumentKey, Timeframe};
 use getrich_core::pulse::MarketPulse;
@@ -63,12 +65,14 @@ enum Screen {
     Pulse,
     Data,
     Settings,
+    Workbench,
 }
 
 pub struct GetRichApp {
     core: Arc<App>,
     market: market_map::MapState,
     stock: stock_research::StockResearch,
+    workbench: workbench::WorkbenchState,
     screen: Screen,
     board: String,
     query: String,
@@ -150,6 +154,19 @@ impl GetRichApp {
                         self.reload_map();
                         self.pulse_tick = Some(Instant::now());
                     }
+                    if nav_label(
+                        ui,
+                        &if self.workbench.unread > 0 {
+                            format!("专业工作台 · {}", self.workbench.unread)
+                        } else {
+                            "专业工作台".into()
+                        },
+                        self.screen == Screen::Workbench,
+                    )
+                    .clicked()
+                    {
+                        self.open_workbench();
+                    }
                     if nav_label(ui, "数据中心", self.screen == Screen::Data).clicked() {
                         self.screen = Screen::Data;
                         self.reload_stats();
@@ -202,6 +219,16 @@ impl GetRichApp {
                                 }
                                 Screen::Data => self.reload_stats(),
                                 Screen::Settings => {}
+                                Screen::Workbench => {
+                                    let tool = self.workbench.tool.clone();
+                                    let p = self
+                                        .workbench
+                                        .forms
+                                        .get(&tool)
+                                        .cloned()
+                                        .unwrap_or(json!({}));
+                                    self.run_workbench(&tool, p);
+                                }
                             }
                         }
                     });
@@ -248,6 +275,7 @@ impl GetRichApp {
             core,
             market: Default::default(),
             stock: Default::default(),
+            workbench: Default::default(),
             screen: Screen::Quotes,
             board: board.clone(),
             query: String::new(),
@@ -374,10 +402,14 @@ impl eframe::App for GetRichApp {
         self.tick_background();
         self.tick_live_quote();
         self.tick_pulse();
+        self.tick_workbench();
         if self.loading
             || self.market.loading
             || self.detail_loading
-            || matches!(self.screen, Screen::Data | Screen::Settings)
+            || matches!(
+                self.screen,
+                Screen::Data | Screen::Settings | Screen::Workbench
+            )
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         } else if self.screen == Screen::Pulse {
@@ -394,6 +426,7 @@ impl eframe::App for GetRichApp {
             Screen::Pulse => self.ui_pulse(ctx),
             Screen::Data => self.ui_data(ctx),
             Screen::Settings => self.ui_settings(ctx),
+            Screen::Workbench => self.ui_workbench(ctx),
         }
         if let Some((message, created)) = &self.ui_notice {
             if created.elapsed() < Duration::from_secs(6) {

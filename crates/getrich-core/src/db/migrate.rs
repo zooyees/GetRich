@@ -37,6 +37,21 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "007_provider_cache",
         include_str!("../../migrations/007_provider_cache.sql"),
     ),
+    (
+        8,
+        "008_research_journal",
+        include_str!("../../migrations/008_research_journal.sql"),
+    ),
+    (
+        9,
+        "009_research_modes",
+        include_str!("../../migrations/009_research_modes.sql"),
+    ),
+    (
+        10,
+        "010_professional_workbench",
+        include_str!("../../migrations/010_professional_workbench.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize)]

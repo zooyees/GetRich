@@ -137,6 +137,17 @@ test('one snapshot bar still starts one automatic history job and manual retry i
   await f.app.stockResearch.ensure('history',true);
   assert.equal(f.model.requests.filter(r=>r.method==='job.submit').length,2);
 });
+test('research styles reuse their corresponding coalesced background data jobs',async()=>{
+ for(const [mode,section] of [['intraday','intraday'],['value','f10'],['swing','history']]){
+  const f=await fixture();f.settings.provider.configured=true;const research=f.app.stockResearch;
+  research.tab='analysis';research.analysis.mode=mode;research.analysis.load=async()=>{};
+  research.data={datasets:{history:{needs_refresh:true},intraday:{needs_refresh:true},financial:{needs_refresh:true},valuation:{needs_refresh:true}}};
+  await research.ensure('analysis',true);await research.ensure('analysis',true);
+  const requests=f.model.requests.filter(r=>r.method==='job.submit'&&r.params.params.section===section);
+  assert.equal(requests.length,1,mode+' should coalesce the job');assert.equal(f.nodes.get('research-refresh').hidden,false);assert.equal(f.nodes.get('research-refresh').disabled,true);
+  let updates=0;research.update=async()=>{updates++;};for(const timer of f.intervals)if(timer.delay===30000)timer.fn();assert.ok(updates>0,'active analysis must have a refresh timer');
+ }
+});
 
 test('announcement titles are escaped and unsafe external protocols are rejected',async()=>{
   const f=await fixture();f.app.stockResearch.tab='announcements';

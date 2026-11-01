@@ -175,6 +175,36 @@ impl GetRichApp {
                                 }
                             });
                         });
+                    if !self.stock.intraday {
+                        let previous = self.preferences.price_basis.clone();
+                        egui::ComboBox::from_id_salt("kline-price-basis")
+                            .width(76.0)
+                            .selected_text(match previous.as_str() {
+                                "qfq" => "前复权",
+                                "hfq" => "后复权",
+                                _ => "不复权",
+                            })
+                            .show_ui(ui, |ui| {
+                                for (id, label) in
+                                    [("raw", "不复权"), ("qfq", "前复权"), ("hfq", "后复权")]
+                                {
+                                    ui.selectable_value(
+                                        &mut self.preferences.price_basis,
+                                        id.into(),
+                                        label,
+                                    );
+                                }
+                            });
+                        if self.preferences.price_basis != previous {
+                            self.bars = None;
+                            self.submit_action(
+                                "ma-preferences",
+                                "settings.save",
+                                json!({"preferences":{"price_basis":self.preferences.price_basis}}),
+                            );
+                            self.reload_bars();
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
                         if !self.stock.intraday {
@@ -293,10 +323,15 @@ impl GetRichApp {
             .as_ref()
             .map(|b| {
                 format!(
-                    "{} — {} · {} 根 · 原始价格 / 未复权{}",
+                    "{} — {} · {} 根 · {}{}",
                     b.from.as_deref().unwrap_or("—"),
                     b.to.as_deref().unwrap_or("—"),
                     b.count,
+                    match b.price_basis.as_str() {
+                        "qfq" => "前复权",
+                        "hfq" => "后复权",
+                        _ => "原始价格 / 未复权",
+                    },
                     if b.partial_last_period {
                         " · 当前周期未结束"
                     } else {

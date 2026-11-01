@@ -3,7 +3,7 @@
 pub fn select_import() -> Result<Option<std::path::PathBuf>, String> {
     use windows_sys::Win32::UI::Controls::Dialogs::*;
     let mut buffer = vec![0u16; 32768];
-    let filter: Vec<u16> = "JSON 数据文件\0*.json\0所有文件\0*.*\0\0"
+    let filter: Vec<u16> = "数据文件 (JSON / CSV)\0*.json;*.csv\0CSV 流水与资料\0*.csv\0JSON 数据文件\0*.json\0所有文件\0*.*\0\0"
         .encode_utf16()
         .collect();
     let title: Vec<u16> = "选择要校验的数据文件\0".encode_utf16().collect();

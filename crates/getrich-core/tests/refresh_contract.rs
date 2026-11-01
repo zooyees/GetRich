@@ -36,6 +36,13 @@ fn concurrent_bar_reads_do_not_attach_a_newer_revision_to_older_ohlc() {
     let writer_app = Arc::clone(&app);
     let finished = Arc::clone(&done);
     let writer = std::thread::spawn(move || {
+        struct Complete(Arc<AtomicBool>);
+        impl Drop for Complete {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let _complete = Complete(finished.clone());
         for i in 1..=40 {
             let close = 10.0 + i as f64 / 100.0;
             let bundle=import::parse_json(&json!({"quotes":[{"symbol":"600001","market":"CN.SH","ts":format!("2026-10-23T02:00:{i:02}Z"),"last":close,"prev_close":10.0}],"bars":[bar(close)]}).to_string(),ImportKind::Bundle).unwrap();

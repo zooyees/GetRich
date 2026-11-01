@@ -84,6 +84,7 @@ fn save(
     let now = db::now_rfc3339();
     let (rows, date, error) = match result {
         Ok(rows) => {
+            crate::professional::capture_research(conn, key, dataset, source, &rows)?;
             let date = rows
                 .iter()
                 .filter_map(|v| {
@@ -136,9 +137,10 @@ impl App {
                 intraday["prev_close"] = json!(fallback.or(previous));
             }
         }
-        Ok(
-            json!({"schema_version":1,"symbol":key.symbol,"market":key.market.as_str(),"supported":key.market.as_str().starts_with("CN."),"datasets":datasets}),
-        )
+        Ok({
+            crate::professional::overlay_research(self, key, &mut datasets)?;
+            json!({"schema_version":1,"symbol":key.symbol,"market":key.market.as_str(),"supported":key.market.as_str().starts_with("CN."),"datasets":datasets})
+        })
     }
 }
 

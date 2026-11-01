@@ -103,6 +103,8 @@ pub struct QuoteBoardPage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BarPage {
+    pub price_basis: String,
+    pub adjustment: serde_json::Value,
     /// Always uses daily closes, including for weekly/monthly display bars.
     pub moving_averages: Vec<crate::indicators::MovingAverage>,
     pub basis_timeframe: String,
