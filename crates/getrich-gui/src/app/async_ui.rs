@@ -460,6 +460,22 @@ impl GetRichApp {
                     self.jobs_cache = value;
                 }
                 Ok(Payload::Action(purpose, value)) => {
+                    if purpose == "ai-generate" {
+                        self.loading = false;
+                        self.error = None;
+                        self.stock.tick = None;
+                        self.read_research();
+                        continue;
+                    }
+                    if purpose == "ai-settings" {
+                        self.loading = false;
+                        self.stock.ai_key.clear();
+                        self.stock.ai_config = None;
+                        self.settings_cache = value;
+                        self.import_msg = "AI 模型设置已保存。".into();
+                        self.read_research();
+                        continue;
+                    }
                     if purpose == "ma-preferences" || purpose == "research-mode" {
                         if purpose == "research-mode" {
                             self.loading = false;

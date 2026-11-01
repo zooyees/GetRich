@@ -24,6 +24,7 @@ export class Management{
     $("default-board").innerHTML=BOARDS.map(([id,label])=>`<option value="${id}">${label}</option>`).join("");$("default-board").value=data.default_board;
     const p=data.provider||{};this.renderProvider(p);
     $("provider-user").value=p.user_id||"";$("provider-token").placeholder=p.token_mask||"未配置";$("provider-enabled").checked=!!p.enabled;$("provider-poll").value=p.poll_ms||5000;$("provider-universe").value=p.universe||"full";$("provider-test").disabled=!p.configured;
+    const ai=data.ai||{};$('ai-enabled').checked=!!ai.enabled;$('ai-base').value=ai.base_url||'';$('ai-model').value=ai.model||'';$('ai-key-status').textContent=ai.key_from_environment?'当前使用环境变量密钥':ai.key_configured?'已保存密钥，留空保留':'尚未配置密钥';
     const prefs=data.preferences||{};$("pref-factor-source").value=prefs.adjustment_source||"";$("pref-theme").value=prefs.theme||"dark";$("pref-colors").value=prefs.colors||"red_up";$("pref-width").value=prefs.list_width||440;
     $("pref-columns").innerHTML=[...new Set([...(prefs.columns||[]),...COLUMNS.map(c=>c[0])])].map(key=>{const label=COLUMNS.find(c=>c[0]===key)?.[1]||key;return `<div class="column-option"><label class="check"><input type="checkbox" value="${key}" ${["symbol","name"].includes(key)?"checked disabled":(prefs.columns||[]).includes(key)?"checked":""}>${label}</label><button type="button" data-column-up aria-label="前移 ${label}">↑</button><button type="button" data-column-down aria-label="后移 ${label}">↓</button></div>`;}).join("");
     this.renderWatch(data.watchlist||[]);
@@ -73,6 +74,8 @@ export class Management{
     action($("tushare-indices"),"click",()=>this.submitJob("tushare.indices"));
     $("jobs-box").onclick=e=>{const button=e.target.closest("button");if(!button)return;busy(button,async()=>{await invoke(button.dataset.cancel?"job.cancel":"job.retry",{id:Number(button.dataset.cancel||button.dataset.retry)});await this.loadJobs();}).catch(()=>{});};
     action($("provider-form"),"submit",async()=>{const provider={user_id:$("provider-user").value.trim(),enabled:$("provider-enabled").checked,poll_ms:Number($("provider-poll").value),universe:$("provider-universe").value};if($("provider-token").value.trim())provider.token=$("provider-token").value.trim();await this.save({provider});$("provider-token").value="";await this.loadSettings();});
+    action($('ai-form'),'submit',async()=>{const ai={enabled:$('ai-enabled').checked,base_url:$('ai-base').value.trim(),model:$('ai-model').value.trim()};if($('ai-key').value.trim())ai.api_key=$('ai-key').value.trim();await this.save({ai});$('ai-key').value='';await this.loadSettings();});
+    action($('ai-clear'),'click',async()=>{await this.save({ai:{api_key:'',enabled:false}});$('ai-key').value='';await this.loadSettings();});
     action($("provider-test"),"click",()=>this.submitJob("provider.test"));
     action($("provider-clear"),"click",async()=>{await this.save({provider:{token:"",enabled:false}});await this.loadSettings();});
     $("default-board").onchange=async()=>{const old=this.settings.default_board;try{await this.save({default_board:$("default-board").value});}catch(e){$("default-board").value=old;toast(e.message,true);}};

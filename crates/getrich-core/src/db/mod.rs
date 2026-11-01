@@ -138,7 +138,7 @@ mod tests {
         assert!(second.is_empty());
         let status = migration_status(&conn).unwrap();
         assert_eq!(status.current_version, schema_version());
-        assert_eq!(schema_version(), 10);
+        assert_eq!(schema_version(), 11);
         let user: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

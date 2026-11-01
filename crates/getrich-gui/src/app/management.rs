@@ -5,6 +5,7 @@ const SETTINGS_SECTIONS: &[(&str, &str)] = &[
     ("行情与外观", "主题、默认板块与列"),
     ("自选管理", "添加、排序与导入"),
     ("存储与诊断", "本地文件与近期查看"),
+    ("AI 模型", "模型接口与分析配置"),
 ];
 impl GetRichApp {
     pub(super) fn ui_data(&mut self, ctx: &egui::Context) {
@@ -409,6 +410,7 @@ impl GetRichApp {
             0 => self.settings_provider(ui),
             1 => self.settings_appearance(ui),
             2 => self.settings_watch(ui),
+            4 => self.settings_ai(ui),
             _ => self.settings_storage(ui),
         });
     }

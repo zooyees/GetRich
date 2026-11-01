@@ -46,7 +46,7 @@ fn local_analysis_preserves_drafts_and_renders_at_small_and_large_sizes() {
     crate::fonts::install(&ctx);
     GetRichApp::install_theme(&ctx);
     for size in [Vec2::new(1024.0, 768.0), Vec2::new(1920.0, 1080.0)] {
-        let output = ctx.run(
+        let mut output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                 ..Default::default()
@@ -56,6 +56,58 @@ fn local_analysis_preserves_drafts_and_renders_at_small_and_large_sizes() {
                 app.ui_quotes(ctx);
             },
         );
+        assert!(output.shapes.iter().any(
+            |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains("AI 个股分析"))
+        ));
+        if !output
+            .shapes
+            .iter()
+            .any(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains("RSI14")))
+        {
+            let toggle = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.job.text == "本地指标与数据依据" => {
+                        Some(t.pos + t.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .expect("local metrics remain available behind the disclosure");
+            for pressed in [true, false] {
+                output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        events: vec![
+                            egui::Event::PointerMoved(toggle),
+                            egui::Event::PointerButton {
+                                pos: toggle,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.ui_navigation(ctx);
+                        app.ui_quotes(ctx);
+                    },
+                );
+            }
+            for _ in 0..6 {
+                output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        app.ui_navigation(ctx);
+                        app.ui_quotes(ctx);
+                    },
+                );
+            }
+        }
         assert!(output.shapes.iter().any(
             |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains("RSI14"))
         ));

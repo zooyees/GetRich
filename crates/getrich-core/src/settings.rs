@@ -149,7 +149,7 @@ impl App {
         let (responses,history,ranges):(u64,u64,u64)=conn.query_row("SELECT (SELECT count(*) FROM provider_cache),(SELECT count(*) FROM provider_history),(SELECT count(*) FROM provider_coverage)",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(crate::db::DbError::from)?;
         Ok(
             json!({"default_board":cfg.universe.default_board,"watchlist":cfg.universe.watchlist,
-            "provider":self.tushare_status(),"preferences":cfg.preferences,
+            "provider":self.tushare_status(),"ai":crate::ai::status(&cfg.ai),"preferences":cfg.preferences,
             "config_path":self.config_path,"data_root":self.config_path.parent(),"db_path":self.db.path,
             "storage_change_requires_restart":true,"local_storage":{"schema_version":crate::db::schema_version(),"cached_responses":responses,"history_rows":history,"covered_ranges":ranges,"policy":"历史只补缺口；实时行情持续更新；成功响应自动落盘"}}),
         )
@@ -157,6 +157,24 @@ impl App {
 
     pub fn save_settings(&self, params: &Value) -> Result<Value, AppError> {
         self.update_settings(|cfg| {
+            if let Some(p) = params.get("ai") {
+                if let Some(v) = p["enabled"].as_bool() {
+                    cfg.ai.enabled = v;
+                }
+                if let Some(v) = p["base_url"].as_str() {
+                    cfg.ai.base_url = v.trim().trim_end_matches('/').into();
+                }
+                if let Some(v) = p["model"].as_str() {
+                    cfg.ai.model = v.trim().into();
+                }
+                if let Some(v) = p["api_key"].as_str() {
+                    cfg.ai.api_key = v.trim().into();
+                }
+                if let Some(v) = p["timeout_seconds"].as_u64() {
+                    cfg.ai.timeout_seconds = v;
+                }
+                crate::ai::validate_config(&cfg.ai, cfg.ai.enabled)?;
+            }
             if let Some(board) = params.get("default_board").and_then(Value::as_str) {
                 validate_board(board)?;
                 cfg.universe.default_board = board.into();

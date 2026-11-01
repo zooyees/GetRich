@@ -1,6 +1,7 @@
 //! Quote board in egui: dense Tonghuashun table, Apple chrome.
 
 use eframe::egui::{self, Color32, Margin, Pos2, Rect, Rounding, Sense, Stroke, Vec2};
+mod ai_panel;
 mod analysis_panel;
 mod async_ui;
 mod design;

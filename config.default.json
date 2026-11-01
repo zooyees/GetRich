@@ -1,4 +1,5 @@
 {
+  "ai": {"enabled": false, "base_url": "", "model": "", "api_key": "", "timeout_seconds": 120},
   "system": {
     "db_name": "getrich.db",
     "log_file": "getrich.log",

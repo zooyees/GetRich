@@ -17,6 +17,8 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
+    pub ai: AiConfig,
+    #[serde(default)]
     pub preferences: UiPreferences,
     #[serde(default)]
     pub system: SystemConfig,
@@ -26,6 +28,28 @@ pub struct AppConfig {
     pub universe: UniverseConfig,
     #[serde(default)]
     pub data: DataConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    pub enabled: bool,
+    /// API base, e.g. https://api.deepseek.com/v1 or http://localhost:11434/v1.
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+    pub timeout_seconds: u64,
+}
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: String::new(),
+            model: String::new(),
+            api_key: String::new(),
+            timeout_seconds: 120,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,12 +1,14 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 async function fixture(){
- const nodes=new Map(),model={quote:{symbol:'600001',market:'CN.SH'},active:true,fail:false,gate:null,revision:0,preferences:{research_mode:'swing'},requests:[]};
+ const nodes=new Map(),model={quote:{symbol:'600001',market:'CN.SH'},active:true,fail:false,gate:null,revision:0,preferences:{research_mode:'swing'},requests:[],ai:{settings:{configured:true},latest:null,history:[]}};
  const node=id=>{if(!nodes.has(id))nodes.set(id,{innerHTML:'',addEventListener(k,fn){this[k]=fn;}});return nodes.get(id);};
  const document={getElementById:node,activeElement:null};
  const context=vm.createContext({console,document,setTimeout,clearTimeout,AbortController,Intl,fetch:async(_,o)=>{
   const {method,params}=JSON.parse(o.body);model.requests.push({method,params});if(model.gate&&method==='stock.analysis')await model.gate;
   if(method==='settings.get')return {ok:true,json:async()=>({preferences:model.preferences})};
   if(method==='settings.save'){model.preferences=params.preferences;return {ok:true,json:async()=>({preferences:model.preferences})};}
+  if(method==='ai.analysis.get')return {ok:true,json:async()=>model.ai};
+  if(method==='ai.analysis.generate')return {ok:true,json:async()=>({id:1,reused:false})};
   if(method==='stock.analysis')return {ok:true,json:async()=>({symbol:params.symbol,market:params.market,mode:params.mode,price_basis:params.basis,evaluation_date:'2024-01-03',workspace:{title:params.mode,metrics:[{label:params.mode+' metric',value:1}],warnings:[]},from:'2024-01-01',as_of:'2024-01-03',sample_count:3,data_version:1,warnings:[],sources:['fixture'],metrics:{},methodology:'fixture',note:{mode:params.mode,revision:model.revision,thesis:'saved '+params.symbol,risks:'',plan:'',review:''}})};
   if(method==='research.note.save'){if(model.fail)return {ok:false,status:400,json:async()=>({ok:false,error:{message:'记录版本冲突'}})};return {ok:true,json:async()=>({...params,revision:++model.revision})};}
   return {ok:true,json:async()=>({rows:[]})};
@@ -44,4 +46,17 @@ test('the preferred research style restores on the first load',async()=>{
 });
 test('late raw analysis cannot replace adjusted analysis and saved evidence retains the basis',async()=>{
  const f=await fixture(),preferences={price_basis:'raw'};f.ui.preferences=()=>preferences;await f.ui.load();let release;f.model.gate=new Promise(r=>release=r);const old=f.ui.load();await new Promise(r=>setImmediate(r));preferences.price_basis='qfq';const current=f.ui.load();await new Promise(r=>setImmediate(r));release();await Promise.all([old,current]);f.model.gate=null;assert.equal(f.ui.reports.get(f.ui.reportKey()).price_basis,'qfq');await f.ui.action('save');assert.equal(f.model.requests.findLast(r=>r.method==='research.note.save').params.basis,'qfq');
+});
+
+test('AI report is primary, model output is escaped and page reads never generate',async()=>{
+ const f=await fixture();f.model.ai.latest={id:1,model:'fixture',status:'succeeded',report:{summary:'<script>not executable</script>',sections:[{key:'technical',text:'<img src=x onerror=bad()>',evidence:['E2']}]},input:{evidence:[{id:'E2',kind:'metrics',data:{value:1}}]}};
+ await f.ui.load();const html=f.nodes.get('research-panel').innerHTML;assert.ok(html.indexOf('AI 个股分析')<html.indexOf('本地指标与数据依据'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(!html.includes('<script>'));assert.ok(html.includes('个人备注（可选）'));assert.ok(!f.model.requests.some(r=>r.method==='ai.analysis.generate'));
+ await f.ui.action('ai-generate');assert.equal(f.model.requests.filter(r=>r.method==='ai.analysis.generate').length,1);const p=f.model.requests.findLast(r=>r.method==='ai.analysis.generate').params;assert.equal(p.symbol,'600001');assert.ok(!('thesis' in p));
+});
+test('AI results remain scoped to stock, research style and price basis',async()=>{
+ const f=await fixture();f.model.ai.latest={status:'succeeded',report:{summary:'FIRST_STOCK_REPORT',sections:[]}};await f.ui.load();f.model.quote={symbol:'600002',market:'CN.SH'};f.ui.render();assert.ok(!f.nodes.get('research-panel').innerHTML.includes('FIRST_STOCK_REPORT'));f.model.ai={settings:{configured:true},latest:null,history:[]};await f.ui.load();assert.ok(!f.nodes.get('research-panel').innerHTML.includes('FIRST_STOCK_REPORT'));
+ await f.ui.action('mode:value');assert.equal(f.model.requests.findLast(r=>r.method==='ai.analysis.get').params.mode,'value');assert.equal(f.model.requests.findLast(r=>r.method==='ai.analysis.get').params.basis,'raw');
+});
+test('AI reports show provider errors and changed-data notices without losing personal drafts',async()=>{
+ const f=await fixture();await f.ui.load();const key=f.ui.key();f.ui.drafts.get(key).thesis='LOCAL_PERSONAL';f.ui.drafts.get(key)._dirty=true;f.model.ai.latest={id:2,status:'failed',error:'HTTP 429',data_changed:true};await f.ui.load();const html=f.nodes.get('research-panel').innerHTML;assert.ok(html.includes('HTTP 429'));assert.ok(html.includes('本地数据已有变化'));assert.equal(f.ui.drafts.get(key).thesis,'LOCAL_PERSONAL');assert.equal(f.model.requests.filter(r=>r.method==='ai.analysis.generate').length,0);
 });

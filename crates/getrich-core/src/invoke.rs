@@ -10,6 +10,8 @@ use std::path::Path;
 
 pub fn invoke(app: &App, method: &str, params: Value) -> Result<Value, AppError> {
     match method {
+        "ai.analysis.get" => app.ai_analysis_get(&params),
+        "ai.analysis.generate" => app.ai_analysis_generate(&params),
         "workbench.catalog" => crate::professional::execute(app, "catalog", &params),
         "workbench.execute" => crate::professional::execute(
             app,

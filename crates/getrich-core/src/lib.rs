@@ -5,6 +5,7 @@
 //! `import`, read models in `view`, orchestration in `service`, JSON invoke
 //! in `invoke`.
 
+pub mod ai;
 pub mod analysis;
 mod analysis_modes;
 pub mod bar_refresh;

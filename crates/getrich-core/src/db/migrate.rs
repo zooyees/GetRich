@@ -52,6 +52,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "010_professional_workbench",
         include_str!("../../migrations/010_professional_workbench.sql"),
     ),
+    (
+        11,
+        "011_ai_analysis",
+        include_str!("../../migrations/011_ai_analysis.sql"),
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize)]

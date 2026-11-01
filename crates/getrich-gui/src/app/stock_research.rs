@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub(super) struct StockResearch {
+    pub ai_config: Option<Value>,
+    pub ai_key: String,
     pub drafts: HashMap<String, Value>,
     pub histories: HashMap<String, Value>,
     pub screen: Value,
@@ -32,6 +34,7 @@ impl GetRichApp {
             core.stock_research(&key)
                 .and_then(|mut v| {
                     if analysis {
+                        v["ai"] = core.ai_analysis_get(&json!({"symbol":key.symbol,"market":key.market.as_str(),"mode":mode,"basis":basis,"factor_source":source}))?;
                         v["analysis"] = core.analysis_workspace_basis(
                             &key,
                             None,
@@ -133,10 +136,16 @@ impl GetRichApp {
             return;
         }
         if !self.controller.is_pending("read:research")
-            && self
-                .stock
-                .tick
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(30))
+            && self.stock.tick.is_none_or(|t| {
+                t.elapsed()
+                    > Duration::from_secs(
+                        if self.stock.data["ai"]["latest"]["status"] == "running" {
+                            2
+                        } else {
+                            30
+                        },
+                    )
+            })
         {
             self.stock.tick = Some(Instant::now());
             self.read_research();
@@ -163,7 +172,7 @@ impl GetRichApp {
                 },
                 "资金流向",
                 "公司公告",
-                "研究分析",
+                "AI 分析",
             ]
             .iter()
             .enumerate()

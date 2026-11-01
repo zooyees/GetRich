@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 pub fn capabilities_json() -> Value {
-    json!({
+    let mut v = json!({
         "transport": {
             "contract_version":2,
             "event_limit":16,
@@ -80,5 +80,10 @@ pub fn capabilities_json() -> Value {
             {"method": "tushare.quote", "params": {"symbol": "600519", "market": "CN.SH"}}
         ],
         "events": ["quote.updated", "ingest.done", "snapshot.available", "settings.changed", "job.updated", "stock.updated", "resync_required", "ping"]
-    })
+    });
+    v["methods"].as_array_mut().unwrap().extend([
+        json!({"method":"ai.analysis.get","params":{"symbol":"600519","market":"CN.SH","mode":"swing","basis":"raw"}}),
+        json!({"method":"ai.analysis.generate","params":{"symbol":"600519","market":"CN.SH","mode":"swing","basis":"raw"}}),
+    ]);
+    v
 }
