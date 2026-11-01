@@ -21,6 +21,24 @@ pub fn install(ctx: &egui::Context) {
             tracing::error!("No CJK font found. Chinese UI text will render as boxes.");
         }
     }
+    // Keep Latin UI text and Chinese text in the same Windows UI family style.
+    // Numeric monospace text uses Consolas; Chinese stays a proportional fallback.
+    let win = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
+    for (file, name, family) in [
+        ("segoeui.ttf", "ui-latin", FontFamily::Proportional),
+        ("consola.ttf", "ui-numbers", FontFamily::Monospace),
+    ] {
+        if let Ok(bytes) = std::fs::read(Path::new(&win).join("Fonts").join(file)) {
+            fonts
+                .font_data
+                .insert(name.into(), FontData::from_owned(bytes));
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .insert(0, name.into());
+        }
+    }
     ctx.set_fonts(fonts);
 }
 
@@ -64,10 +82,10 @@ fn candidates() -> Vec<PathBuf> {
     // TrueType only. CFF .otf and some TTC faces report zero advance in ab_glyph,
     // which stacks every glyph of 「涨跌幅」 on one pixel.
     for name in [
-        "Deng.ttf",
-        "msyh.ttf",
-        "simhei.ttf",
         "msyh.ttc",
+        "msyh.ttf",
+        "Deng.ttf",
+        "simhei.ttf",
         "msyhl.ttc",
     ] {
         out.push(fonts.join(name));

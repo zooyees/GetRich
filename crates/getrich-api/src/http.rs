@@ -18,6 +18,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const APP_CSS: &str = include_str!("../web/app.css");
+const STOCK_DETAIL_CSS: &str = include_str!("../web/stock-detail.css");
 const APP_JS: &str = include_str!("../web/app.js");
 const RUNTIME_JS: &str = include_str!("../web/runtime.js");
 const CHART_JS: &str = include_str!("../web/chart.js");
@@ -111,6 +112,11 @@ fn handle_request(mut request: Request, app: &App, running: &AtomicBool) -> Resu
         (Method::Get, "/app.css") => {
             respond_bytes(request, "text/css; charset=utf-8", APP_CSS.as_bytes())
         }
+        (Method::Get, "/stock-detail.css") => respond_bytes(
+            request,
+            "text/css; charset=utf-8",
+            STOCK_DETAIL_CSS.as_bytes(),
+        ),
         (Method::Get, "/app.js") => respond_bytes(
             request,
             "application/javascript; charset=utf-8",

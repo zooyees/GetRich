@@ -171,7 +171,13 @@ pub(super) fn draw_quote_summary(ui: &mut egui::Ui, detail: &StockDetail) {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing = Vec2::new(12.0, 2.0);
             ui.spacing_mut().interact_size.y = 22.0;
-            let columns = if ui.available_width() >= 1180.0 { 8 } else { 4 };
+            let columns = if ui.available_width() >= 1300.0 {
+                8
+            } else if ui.available_width() >= 640.0 {
+                4
+            } else {
+                2
+            };
             let width = (ui.available_width() - 12.0 * (columns - 1) as f32) / columns as f32;
             for row in fields.chunks(columns) {
                 ui.horizontal(|ui| {
@@ -182,7 +188,7 @@ pub(super) fn draw_quote_summary(ui: &mut egui::Ui, detail: &StockDetail) {
                             |ui| {
                                 ui.set_width(width);
                                 ui.set_min_height(22.0);
-                                ui.colored_label(muted(), egui::RichText::new(*label).size(11.0));
+                                ui.colored_label(muted(), egui::RichText::new(*label).size(12.0));
                                 let color = match price.zip(q.prev_close) {
                                     Some((p, c)) if p > c => up_color(),
                                     Some((p, c)) if p < c => down_color(),

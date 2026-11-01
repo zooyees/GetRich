@@ -2,13 +2,15 @@
 
 **[中文](#中文)** · **[English](#english)**
 
-股票分析系统基座（Rust）：配置 / SQLite / 导入约定 / 同花顺风格行情展示。当前版本 **0.4.0**。架构对齐 [WiParse](https://github.com/zooyees/WiParse)（`*-core` + JSON CLI + localhost API + GUI 图标接线）。提供短线/波段/长线研究、专业指标、版本记录、组合复盘与受约束的单证券策略验证。A 股可通过 TuShare `rt_k` 在交易时段刷新报价。
+股票分析系统基座（Rust）：配置 / SQLite / 导入约定 / 同花顺风格行情展示。当前版本 **0.4.1**。架构对齐 [WiParse](https://github.com/zooyees/WiParse)（`*-core` + JSON CLI + localhost API + GUI 图标接线）。提供短线/波段/长线研究、专业指标、版本记录、组合复盘与受约束的单证券策略验证。A 股可通过 TuShare `rt_k` 在交易时段刷新报价。
 
-Stock analysis foundation (Rust): config / SQLite / import contract / Tonghuashun-style quote board. **0.4.0**. Research workspaces, auditable data, portfolio accounting and constrained single-security backtesting. A-share quotes can refresh in session via TuShare `rt_k`.
+Stock analysis foundation (Rust): config / SQLite / import contract / Tonghuashun-style quote board. **0.4.1**. Research workspaces, auditable data, portfolio accounting and constrained single-security backtesting. A-share quotes can refresh in session via TuShare `rt_k`.
 
 ---
 
 ## 中文
+
+0.4.1 统一个股行情、分时、F10、资金、公告和研究分析的布局、字体与表格，见 [发布说明](docs/RELEASE_0.4.1.md) 和 [UI审查](docs/STOCK_DETAIL_UI_AUDIT_0.4.1.md)。
 
 0.4.0 新增“专业工作台”：专业数据版本与质量、原价/前后复权、指标副图、同业/多股比较、模板/研究池、预警、组合账本和冻结输入回测。严格时点资料不足时阻止运行；支持明确标注的历史研究模拟。见 [0.4.0发布说明](docs/RELEASE_0.4.0.md) 和 [操作手册](docs/PROFESSIONAL_WORKBENCH_GUIDE.md)。
 
@@ -84,7 +86,7 @@ cargo run -p getrich-cli -- stock show --symbol 600519 --market CN.SH --pretty
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\pack-windows.ps1
-# dist\GetRich-Windows-0.4.0-YYYYMMDD.zip
+# dist\GetRich-Windows-0.4.1-YYYYMMDD.zip
 ```
 
 图标：将官方 `D:\windlink\windlink\GetRich\icon\GetRich.ico` 覆盖仓库 `icon/GetRich.ico` 后重新打包。

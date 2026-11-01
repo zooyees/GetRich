@@ -34,7 +34,7 @@ export class Chart{
     const canvas=this.canvas,ctx=canvas.getContext("2d"),w=canvas.clientWidth,h=canvas.clientHeight;if(!w||!h)return;
     const dpr=window.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
     const css=getComputedStyle(document.documentElement),muted=css.getPropertyValue("--muted").trim(),line=css.getPropertyValue("--line").trim();
-    const up=css.getPropertyValue("--up").trim(),down=css.getPropertyValue("--down").trim();ctx.font="11px system-ui";ctx.fillStyle=muted;
+    const up=css.getPropertyValue("--up").trim(),down=css.getPropertyValue("--down").trim();ctx.font='12px "Segoe UI","Microsoft YaHei",sans-serif';ctx.fillStyle=muted;
     if(this.loading||!this.rows.length){this.grid=null;ctx.textAlign="center";ctx.fillText(this.loading?"正在载入 K 线…":this.message,w/2,h/2);this.meta.textContent=this.loading?"加载中":this.message;return;}
     const visible=range(this.rows.length,this.span,this.end);this.span=visible.span;this.end=visible.end;
     const rows=this.rows.slice(visible.start,visible.end);const ma=this.ma.filter(a=>this.enabled.has(a.period)).map(a=>({...a,values:a.values.slice(visible.start,visible.end)}));

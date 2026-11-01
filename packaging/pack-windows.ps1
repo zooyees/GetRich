@@ -57,7 +57,8 @@ Copy-Item -LiteralPath $Cli -Destination (Join-Path $Stage "GetRich-CLI.exe")
 Copy-Item -LiteralPath (Join-Path $Root "config.default.json") -Destination $Stage
 Copy-Item -LiteralPath $Icon -Destination (Join-Path $Stage "GetRich.ico")
 Copy-Item -LiteralPath $Example -Destination (Join-Path $Stage "examples\demo.board.json")
-Copy-Item -LiteralPath (Join-Path $Root "docs\RELEASE_0.4.0.md") -Destination (Join-Path $Stage "RELEASE_NOTES.md")
+Copy-Item -LiteralPath (Join-Path $Root "docs\RELEASE_0.4.1.md") -Destination (Join-Path $Stage "RELEASE_NOTES.md")
+Copy-Item -LiteralPath (Join-Path $Root "docs\STOCK_DETAIL_UI_AUDIT_0.4.1.md") -Destination $Stage
 Copy-Item -LiteralPath (Join-Path $Root "docs\PROFESSIONAL_WORKBENCH_GUIDE.md") -Destination $Stage
 Copy-Item -LiteralPath (Join-Path $Root "docs\REFRESH_ARCHITECTURE_AUDIT_2026-10-28.md") -Destination $Stage
 Copy-Item -LiteralPath (Join-Path $Root "docs\PROFESSIONAL_WORKSTATION_PLAN_2026-11-01.md") -Destination $Stage

@@ -3,6 +3,104 @@ use super::*;
 use getrich_core::import::{parse_json, ImportKind};
 
 #[test]
+fn detail_properties_and_numeric_columns_align_without_overlapping_long_names() {
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    GetRichApp::install_theme(&ctx);
+    for width in [360.0, 560.0, 980.0] {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 600.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    detail_design::install(ui);
+                    detail_design::properties(
+                        ui,
+                        "profile-alignment",
+                        &[
+                            ("公司全称", "示例公司".into()),
+                            (
+                                "办公地址",
+                                "示例地址及办公区域的长文本，用于检验多行起点对齐。".into(),
+                            ),
+                        ],
+                    );
+                    let name_width = ui.available_width() - 100.0 - 64.0 - 24.0;
+                    egui::Grid::new(("numeric-alignment", width as u32))
+                        .num_columns(3)
+                        .spacing([12.0, 2.0])
+                        .show(ui, |ui| {
+                            for (name, amount, ratio) in [
+                                ("股东名称", "持有股数", "占比 %"),
+                                (
+                                    "中国证券基金－用于长名称对齐检查的模拟股东",
+                                    "86.00亿",
+                                    "26.38",
+                                ),
+                                ("短股东", "4.30亿", "13.19"),
+                            ] {
+                                detail_design::cell(ui, name_width, name, false, text_color());
+                                detail_design::cell(ui, 100.0, amount, true, text_color());
+                                detail_design::cell(ui, 64.0, ratio, true, text_color());
+                                ui.end_row();
+                            }
+                        });
+                });
+            },
+        );
+        let bounds = |needle: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        if t.galley.job.text == needle {
+                            Some(t.galley.rect.translate(t.pos.to_vec2()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing {needle}"))
+        };
+        assert!(
+            (bounds("示例公司").left()
+                - bounds("示例地址及办公区域的长文本，用于检验多行起点对齐。").left())
+            .abs()
+                < 1.0
+        );
+        assert!(bounds("公司全称").left() < bounds("示例公司").left());
+        for (name, amount, ratio) in [
+            (
+                "中国证券基金－用于长名称对齐检查的模拟股东",
+                "86.00亿",
+                "26.38",
+            ),
+            ("短股东", "4.30亿", "13.19"),
+        ] {
+            assert!(
+                bounds(name).right() < bounds(amount).left(),
+                "name overlaps amount at {width}"
+            );
+            assert!(
+                bounds(amount).right() < bounds(ratio).left(),
+                "numeric columns overlap at {width}"
+            );
+            assert!(
+                bounds(ratio).right() <= width,
+                "ratio escapes table at {width}"
+            );
+        }
+        assert!((bounds("86.00亿").right() - bounds("4.30亿").right()).abs() < 1.0);
+        assert!((bounds("26.38").right() - bounds("13.19").right()).abs() < 1.0);
+    }
+}
+
+#[test]
 fn professional_forms_layout_and_drafts_survive_all_groups_and_window_sizes() {
     let (mut app, root) = super::interaction_tests::workspace();
     app.workbench.catalog =

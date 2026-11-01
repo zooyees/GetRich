@@ -14,8 +14,8 @@ pub(super) fn ma_color(period: usize) -> Color32 {
 
 pub(super) fn tab(ui: &mut egui::Ui, label: &str, selected: bool, width: f32) -> egui::Response {
     ui.add_sized(
-        [width, 26.0],
-        egui::Button::new(egui::RichText::new(label).size(12.0).color(if selected {
+        [width, 30.0],
+        egui::Button::new(egui::RichText::new(label).size(13.0).color(if selected {
             accent()
         } else {
             muted()
@@ -72,7 +72,7 @@ impl GetRichApp {
                     q.board_label,
                     q.currency.as_deref().unwrap_or("")
                 ))
-                .size(11.0)
+                .size(12.0)
                 .color(muted()),
             )
             .on_hover_text(format!("{source}\n{quality}"));
@@ -110,7 +110,7 @@ impl GetRichApp {
                                 q.trade_date.as_deref().unwrap_or("—"),
                                 warning.as_deref().unwrap_or(quality)
                             ))
-                            .size(10.0)
+                            .size(12.0)
                             .color(muted()),
                         )
                         .truncate(),
@@ -129,7 +129,6 @@ impl GetRichApp {
 
     pub(super) fn chart_toolbar(&mut self, ui: &mut egui::Ui) -> Option<Timeframe> {
         let mut next = None;
-        let inline_tabs = ui.available_width() >= 1000.0;
         let inline_navigation = ui.available_width() >= 580.0;
         egui::Frame::none()
             .fill(secondary_surface())
@@ -140,13 +139,7 @@ impl GetRichApp {
                 ui.spacing_mut().item_spacing = Vec2::new(8.0, 3.0);
                 ui.spacing_mut().button_padding = Vec2::new(6.0, 3.0);
                 ui.spacing_mut().interact_size.y = 28.0;
-                if !inline_tabs {
-                    self.stock_tabs(ui);
-                }
                 ui.horizontal(|ui| {
-                    if inline_tabs {
-                        self.stock_tabs(ui);
-                    }
                     if self.stock.tab != 0 {
                         return;
                     }
@@ -365,15 +358,10 @@ impl GetRichApp {
             ui.spacing_mut().item_spacing = Vec2::new(14.0, 2.0);
             ui.spacing_mut().interact_size.y = 16.0;
             ui.add(egui::Label::new(
-                egui::RichText::new(&range).size(11.0).color(muted()),
+                egui::RichText::new(&range).size(12.0).color(muted()),
             ))
             .on_hover_text(hint);
-            ui.label(
-                egui::RichText::new(&ohlc)
-                    .monospace()
-                    .size(12.0)
-                    .color(text_color()),
-            );
+            ui.label(egui::RichText::new(&ohlc).size(13.0).color(text_color()));
         });
     }
     fn ma_controls(&mut self, ui: &mut egui::Ui) {
@@ -417,7 +405,7 @@ impl GetRichApp {
                     |ui| {
                         ui.set_width(28.0);
                         if row_index == 0 {
-                            ui.label(egui::RichText::new("均线").size(11.0).color(muted()));
+                            ui.label(egui::RichText::new("均线").size(12.0).color(muted()));
                         }
                     },
                 );

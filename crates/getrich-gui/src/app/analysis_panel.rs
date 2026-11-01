@@ -59,103 +59,114 @@ impl GetRichApp {
             return;
         }
         let workspace = &report["workspace"];
-        if mode == "swing" {
-            ui.small(format!(
-                "{} — {} · {} 根日线 · 数据版本 {}",
-                report["from"].as_str().unwrap_or("—"),
-                report["as_of"].as_str().unwrap_or("—"),
-                report["sample_count"],
-                report["data_version"]
-            ));
-        } else {
-            ui.small(format!(
-                "研究截止 {} · 数据时间 {} · 样本 {}",
-                report["evaluation_date"].as_str().unwrap_or("—"),
-                workspace["as_of"].as_str().unwrap_or("—"),
-                workspace["sample_count"]
-            ));
-            if mode == "value" {
+        detail_design::frame().show(ui, |ui| {
+            detail_design::heading(ui, "分析概览", "");
+            if mode == "swing" {
                 ui.small(format!(
-                    "财报期 {} · 公告日 {}",
-                    workspace["report_period"].as_str().unwrap_or("—"),
-                    workspace["disclosed_at"].as_str().unwrap_or("—")
+                    "{} — {} · {} 根日线 · 数据版本 {}",
+                    report["from"].as_str().unwrap_or("—"),
+                    report["as_of"].as_str().unwrap_or("—"),
+                    report["sample_count"],
+                    report["data_version"]
                 ));
+            } else {
+                ui.small(format!(
+                    "研究截止 {} · 数据时间 {} · 样本 {}",
+                    report["evaluation_date"].as_str().unwrap_or("—"),
+                    workspace["as_of"].as_str().unwrap_or("—"),
+                    workspace["sample_count"]
+                ));
+                if mode == "value" {
+                    ui.small(format!(
+                        "财报期 {} · 公告日 {}",
+                        workspace["report_period"].as_str().unwrap_or("—"),
+                        workspace["disclosed_at"].as_str().unwrap_or("—")
+                    ));
+                }
             }
-        }
-        let warnings = if mode == "swing" {
-            &report["warnings"]
-        } else {
-            &workspace["warnings"]
-        };
-        for warning in warnings.as_array().into_iter().flatten() {
-            ui.colored_label(muted(), warning.as_str().unwrap_or(""));
-        }
-        let owned: Vec<(String, String)> = if mode == "swing" {
-            [
-                ("5日收益 %", "return_5_pct"),
-                ("20日收益 %", "return_20_pct"),
-                ("60日收益 %", "return_60_pct"),
-                ("RSI14", "rsi14"),
-                ("MA20", "ma20"),
-                ("MA60", "ma60"),
-                ("MACD DIF", "macd_dif"),
-                ("MACD DEA", "macd_dea"),
-                ("MACD 柱", "macd_histogram"),
-                ("ATR14", "atr14"),
-                ("20日年化波动 %", "volatility20_annual_pct"),
-                ("60根最大回撤 %", "max_drawdown60_pct"),
-                ("相对前20日均量", "volume_ratio20"),
-            ]
-            .iter()
-            .map(|(label, name)| {
-                (
-                    label.to_string(),
-                    report["metrics"][*name]
-                        .as_f64()
-                        .map(|v| format!("{v:.2}"))
-                        .unwrap_or("—".into()),
-                )
-            })
-            .collect()
-        } else {
-            workspace["metrics"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|r| {
+            let warnings = if mode == "swing" {
+                &report["warnings"]
+            } else {
+                &workspace["warnings"]
+            };
+            if let Some(warnings) = warnings.as_array().filter(|w| !w.is_empty()) {
+                ui.collapsing(
+                    format!("数据口径与提示 · {}", warnings.len()),
+                    |ui| {
+                        for warning in warnings {
+                            detail_design::caption(ui, warning.as_str().unwrap_or(""));
+                        }
+                    },
+                );
+            }
+            let owned: Vec<(String, String)> = if mode == "swing" {
+                [
+                    ("5日收益 %", "return_5_pct"),
+                    ("20日收益 %", "return_20_pct"),
+                    ("60日收益 %", "return_60_pct"),
+                    ("RSI14", "rsi14"),
+                    ("MA20", "ma20"),
+                    ("MA60", "ma60"),
+                    ("MACD DIF", "macd_dif"),
+                    ("MACD DEA", "macd_dea"),
+                    ("MACD 柱", "macd_histogram"),
+                    ("ATR14", "atr14"),
+                    ("20日年化波动 %", "volatility20_annual_pct"),
+                    ("60根最大回撤 %", "max_drawdown60_pct"),
+                    ("相对前20日均量", "volume_ratio20"),
+                ]
+                .iter()
+                .map(|(label, name)| {
                     (
-                        r["label"].as_str().unwrap_or("").to_string(),
-                        r["value"]
+                        label.to_string(),
+                        report["metrics"][*name]
                             .as_f64()
                             .map(|v| format!("{v:.2}"))
                             .unwrap_or("—".into()),
                     )
                 })
                 .collect()
-        };
-        let fields: Vec<_> = owned.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-        super::stock_research::metrics(ui, &fields);
-        ui.collapsing("计算口径与数据来源", |ui| {
-            ui.label(workspace["methodology"].as_str().unwrap_or(""));
-            if mode == "swing" {
-                ui.label(format!("来源 {}", report["sources"]));
-            }
-            if let Some(sources) = workspace["provenance"].as_object() {
-                for (name, p) in sources {
-                    ui.label(format!(
-                        "{name} · {} · 更新 {} · 状态 {}",
-                        p["source"].as_str().unwrap_or("—"),
-                        p["updated_at"].as_str().unwrap_or("—"),
-                        p["status"].as_str().unwrap_or("—")
-                    ));
-                    if let Some(e) = p["error"].as_str() {
-                        ui.colored_label(muted(), e);
+            } else {
+                workspace["metrics"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|r| {
+                        (
+                            r["label"].as_str().unwrap_or("").to_string(),
+                            r["value"]
+                                .as_f64()
+                                .map(|v| format!("{v:.2}"))
+                                .unwrap_or("—".into()),
+                        )
+                    })
+                    .collect()
+            };
+            let fields: Vec<_> = owned.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+            super::stock_research::metrics(ui, &fields);
+            ui.collapsing("计算口径与数据来源", |ui| {
+                ui.label(workspace["methodology"].as_str().unwrap_or(""));
+                if mode == "swing" {
+                    ui.label(format!("来源 {}", report["sources"]));
+                }
+                if let Some(sources) = workspace["provenance"].as_object() {
+                    for (name, p) in sources {
+                        ui.label(format!(
+                            "{name} · {} · 更新 {} · 状态 {}",
+                            p["source"].as_str().unwrap_or("—"),
+                            p["updated_at"].as_str().unwrap_or("—"),
+                            p["status"].as_str().unwrap_or("—")
+                        ));
+                        if let Some(e) = p["error"].as_str() {
+                            ui.colored_label(muted(), e);
+                        }
                     }
                 }
-            }
+            });
         });
-        ui.separator();
-        ui.heading("研究记录");
+        ui.add_space(8.0);
+        detail_design::frame().show(ui,|ui| {
+        detail_design::heading(ui,"研究记录","");
         ui.small("记录假设、风险、观察条件与复盘；点击保存写入本地，草稿按股票与研究方式分别保留在当前会话。");
         let mut draft = self
             .stock
@@ -193,12 +204,13 @@ impl GetRichApp {
             for row in note_fields.chunks(columns) {
                 ui.columns(columns, |cols| {
                     for ((field, label), col) in row.iter().zip(cols) {
-                        col.label(*label);
+                        col.label(egui::RichText::new(*label).size(13.0).strong());
                         let mut text = draft[*field].as_str().unwrap_or("").to_string();
                         if col
                             .add(
                                 egui::TextEdit::multiline(&mut text)
                                     .desired_width(f32::INFINITY)
+                                    .margin(Vec2::new(10.0,8.0))
                                     .desired_rows(3),
                             )
                             .changed()
@@ -210,7 +222,7 @@ impl GetRichApp {
                 });
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(!saving, primary_btn("保存研究记录"))
                 .clicked()
@@ -320,8 +332,10 @@ impl GetRichApp {
                 );
             }
         }
-        ui.separator();
-        ui.heading("本地条件选股");
+        });
+        ui.add_space(8.0);
+        detail_design::frame().show(ui,|ui| {
+        detail_design::heading(ui,"本地条件选股","");
         let (mut watch, mut min_change, mut billions) =
             self.stock.screen_params.unwrap_or((false, 2.0, 1.0));
         ui.horizontal_wrapped(|ui|{
@@ -387,5 +401,6 @@ impl GetRichApp {
                 });
             }
         }
+        });
     }
 }

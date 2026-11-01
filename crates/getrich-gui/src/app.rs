@@ -4,6 +4,7 @@ use eframe::egui::{self, Color32, Margin, Pos2, Rect, Rounding, Sense, Stroke, V
 mod analysis_panel;
 mod async_ui;
 mod design;
+mod detail_design;
 mod detail_workspace;
 mod empty_states;
 #[cfg(test)]
@@ -870,13 +871,13 @@ impl GetRichApp {
             self.detail_placeholder(ui);
             return;
         }
-        ui.spacing_mut().item_spacing.y = 3.0;
+        detail_design::install(ui);
         let watch_clicked = self.stock_heading(ui);
         let mut pull_bars = false;
         if let Some(detail) = &self.detail {
             draw_quote_summary(ui, detail);
         }
-        let new_tf = self.chart_toolbar(ui);
+        self.stock_tabs(ui);
         if self.stock.tab != 0 {
             self.research_panel(ui);
             if watch_clicked {
@@ -884,6 +885,7 @@ impl GetRichApp {
             }
             return;
         }
+        let new_tf = self.chart_toolbar(ui);
         if self.stock.intraday {
             self.intraday_chart(ui);
             if watch_clicked {
@@ -1227,7 +1229,7 @@ fn draw_kline(
             Pos2::new(plot.left() - 7.0, yy),
             egui::Align2::RIGHT_CENTER,
             format!("{value:.2}"),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(12.0),
             muted(),
         );
     }
@@ -1242,7 +1244,7 @@ fn draw_kline(
             ),
             egui::Align2::CENTER_TOP,
             rows[index].ts.chars().take(10).collect::<String>(),
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(12.0),
             muted(),
         );
     }
@@ -1250,7 +1252,7 @@ fn draw_kline(
         Pos2::new(plot.left() - 7.0, plot.bottom() + 12.0),
         egui::Align2::RIGHT_TOP,
         format!("量 {}", vol(Some(vmax))),
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(12.0),
         muted(),
     );
     for (i, b) in rows.iter().enumerate() {

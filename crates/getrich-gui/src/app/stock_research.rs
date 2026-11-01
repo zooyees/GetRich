@@ -149,7 +149,7 @@ impl GetRichApp {
     }
     pub(super) fn stock_tabs(&mut self, ui: &mut egui::Ui) {
         let narrow = ui.available_width() < 430.0;
-        let width = ((ui.available_width() - 16.0) / 5.0).min(100.0);
+        let width = ((ui.available_width() - 16.0) / 5.0).min(116.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.spacing_mut().interact_size.y = 26.0;
@@ -238,13 +238,13 @@ impl GetRichApp {
             egui::RichText::new(format!(
                 "{}  ·  数据日期 {}  ·  获取 {}",
                 data["source"].as_str().unwrap_or("Tushare"),
-                data["as_of"].as_str().unwrap_or("—"),
+                detail_design::date(data["as_of"].as_str().unwrap_or("—")),
                 data["updated_at"]
                     .as_str()
                     .map(shanghai_ts)
                     .unwrap_or_else(|| "尚未获取".into())
             ))
-            .size(11.0)
+            .size(12.0)
             .color(muted()),
         );
     }
@@ -255,7 +255,7 @@ impl GetRichApp {
         }
         let section = self.research_section();
         self.research_status(ui, section);
-        ui.add_space(12.0);
+        ui.add_space(4.0);
         if !self
             .detail
             .as_ref()
@@ -272,40 +272,76 @@ impl GetRichApp {
         }
     }
     fn f10_panel(&self, ui: &mut egui::Ui) {
-        let ds = &self.stock.data["datasets"];
-        let company = &ds["company"]["rows"][0];
-        let financial = &ds["financial"]["rows"][0];
-        let valuation = &ds["valuation"]["rows"][0];
-        card(ui, 0.0, |ui| {
-            card_title(
-                ui,
-                "估值与股本",
-                "市值单位为元；股本单位为股，按各自披露日期展示。",
-            );
+        if ui.available_width() >= 1000.0 {
+            ui.columns(2, |columns| {
+                self.valuation_card(&mut columns[0]);
+                self.financial_card(&mut columns[0]);
+                self.company_card(&mut columns[1]);
+                self.holders_card(&mut columns[1]);
+            });
+        } else {
+            self.valuation_card(ui);
+            self.financial_card(ui);
+            self.company_card(ui);
+            self.holders_card(ui);
+        }
+    }
+    fn valuation_card(&self, ui: &mut egui::Ui) {
+        let v = &self.stock.data["datasets"]["valuation"]["rows"][0];
+        detail_design::section(ui, "估值与股本", "市值 / 元 · 股本 / 股", |ui| {
             metrics(
                 ui,
                 &[
-                    ("总市值", money(number(valuation, "total_mv"))),
-                    ("流通市值", money(number(valuation, "circ_mv"))),
-                    ("市盈率 TTM", num(valuation, "pe_ttm")),
-                    ("市净率", num(valuation, "pb")),
-                    ("换手率 %", num(valuation, "turnover_rate")),
-                    ("量比", num(valuation, "volume_ratio")),
-                    ("股息率 TTM %", num(valuation, "dv_ttm")),
-                    ("总股本", money(number(valuation, "total_share"))),
+                    ("总市值", money(number(v, "total_mv"))),
+                    ("流通市值", money(number(v, "circ_mv"))),
+                    ("市盈率 TTM", num(v, "pe_ttm")),
+                    ("市净率", num(v, "pb")),
+                    ("换手率 %", num(v, "turnover_rate")),
+                    ("量比", num(v, "volume_ratio")),
+                    ("股息率 TTM %", num(v, "dv_ttm")),
+                    ("总股本", money(number(v, "total_share"))),
                 ],
             );
             self.dataset_note(ui, "valuation");
         });
-        ui.add_space(12.0);
-        card(ui, 0.0, |ui| {
-            card_title(ui, "公司概况", "上市信息、经营业务与公司治理");
+    }
+    fn financial_card(&self, ui: &mut egui::Ui) {
+        let f = &self.stock.data["datasets"]["financial"]["rows"][0];
+        detail_design::section(
+            ui,
+            "财务指标",
+            &format!(
+                "报告期 {} · 公告 {}",
+                detail_design::date(&value_text(&f["end_date"])),
+                detail_design::date(&value_text(&f["ann_date"]))
+            ),
+            |ui| {
+                metrics(
+                    ui,
+                    &[
+                        ("每股收益", num(f, "eps")),
+                        ("每股净资产", num(f, "bps")),
+                        ("ROE %", num(f, "roe")),
+                        ("毛利率 %", num(f, "grossprofit_margin")),
+                        ("净利率 %", num(f, "netprofit_margin")),
+                        ("资产负债率 %", num(f, "debt_to_assets")),
+                        ("营收同比 %", num(f, "or_yoy")),
+                        ("净利润同比 %", num(f, "netprofit_yoy")),
+                    ],
+                );
+                self.dataset_note(ui, "financial");
+            },
+        );
+    }
+    fn company_card(&self, ui: &mut egui::Ui) {
+        let c = &self.stock.data["datasets"]["company"]["rows"][0];
+        detail_design::section(ui, "公司概况", "", |ui| {
+            let mut rows = vec![];
             if let Some(d) = &self.detail {
-                ui.label(format!(
-                    "{}  ·  {}  ·  上市 {}",
-                    d.listing.name.as_deref().unwrap_or("—"),
-                    d.listing.industry.as_deref().unwrap_or("—"),
-                    d.listing.listing_date.as_deref().unwrap_or("—")
+                rows.push(("所属行业", d.listing.industry.clone().unwrap_or("—".into())));
+                rows.push((
+                    "上市日期",
+                    detail_design::date(d.listing.listing_date.as_deref().unwrap_or("—")),
                 ));
             }
             for (label, field) in [
@@ -315,202 +351,239 @@ impl GetRichApp {
                 ("董秘", "secretary"),
                 ("员工人数", "employees"),
                 ("办公地址", "office"),
-                ("主营业务", "main_business"),
             ] {
-                ui.horizontal_wrapped(|ui| {
-                    ui.colored_label(muted(), format!("{label}："));
-                    ui.label(value_text(&company[field]));
-                });
+                rows.push((label, value_text(&c[field])));
             }
-            if let Some(url) = company["website"]
+            detail_design::properties(ui, "company-profile", &rows);
+            ui.collapsing("主营业务与公司介绍", |ui| {
+                ui.label(value_text(&c["main_business"]));
+                ui.add_space(6.0);
+                ui.label(value_text(&c["introduction"]));
+            });
+            if let Some(url) = c["website"]
                 .as_str()
                 .filter(|u| getrich_core::research::safe_url(u))
             {
                 ui.hyperlink_to("公司网站 ↗", url);
             }
-            ui.collapsing("公司介绍", |ui| {
-                ui.label(value_text(&company["introduction"]));
-            });
             self.dataset_note(ui, "company");
         });
-        ui.add_space(12.0);
-        card(ui, 0.0, |ui| {
-            card_title(
-                ui,
-                "财务指标",
-                "报告期与公告日期分别列示；比率按财报原口径。",
-            );
-            ui.small(format!(
-                "报告期 {}  ·  公告日期 {}",
-                value_text(&financial["end_date"]),
-                value_text(&financial["ann_date"])
-            ));
-            metrics(
-                ui,
-                &[
-                    ("每股收益", num(financial, "eps")),
-                    ("每股净资产", num(financial, "bps")),
-                    ("ROE %", num(financial, "roe")),
-                    ("毛利率 %", num(financial, "grossprofit_margin")),
-                    ("净利率 %", num(financial, "netprofit_margin")),
-                    ("资产负债率 %", num(financial, "debt_to_assets")),
-                    ("营收同比 %", num(financial, "or_yoy")),
-                    ("净利润同比 %", num(financial, "netprofit_yoy")),
-                ],
-            );
-            self.dataset_note(ui, "financial");
-        });
-        ui.add_space(12.0);
-        card(ui, 0.0, |ui| {
-            card_title(ui, "前十大股东", "展示最新报告期；持股数量为股。");
-            if let Some(rows) = ds["holders"]["rows"].as_array().filter(|r| !r.is_empty()) {
-                let width = ui.available_width();
-                let amount_width = (width * 0.22).clamp(82.0, 180.0);
-                let ratio_width = (width * 0.14).clamp(62.0, 110.0);
-                let name_width = (width - amount_width - ratio_width - 32.0).max(100.0);
-                egui::Grid::new("research_holders")
-                    .num_columns(3)
-                    .striped(true)
-                    .spacing([16.0, 10.0])
-                    .show(ui, |ui| {
-                        ui.add_sized(
-                            [name_width, 24.0],
-                            egui::Label::new(egui::RichText::new("股东名称").strong()),
-                        );
-                        ui.add_sized(
-                            [amount_width, 24.0],
-                            egui::Label::new(egui::RichText::new("持有股数").strong()),
-                        );
-                        ui.add_sized(
-                            [ratio_width, 24.0],
-                            egui::Label::new(egui::RichText::new("占比 %").strong()),
-                        );
-                        ui.end_row();
-                        for r in rows {
-                            ui.add_sized(
-                                [name_width, 0.0],
-                                egui::Label::new(value_text(&r["holder_name"])).wrap(),
-                            );
-                            ui.add_sized(
-                                [amount_width, 24.0],
-                                egui::Label::new(money(number(r, "hold_amount"))).truncate(),
-                            );
-                            ui.add_sized(
-                                [ratio_width, 24.0],
-                                egui::Label::new(num(r, "hold_ratio")).truncate(),
-                            );
+    }
+    fn holders_card(&self, ui: &mut egui::Ui) {
+        detail_design::section(
+            ui,
+            "前十大股东",
+            "最新报告期 · 数量 / 股",
+            |ui| {
+                if let Some(rows) = self.stock.data["datasets"]["holders"]["rows"]
+                    .as_array()
+                    .filter(|r| !r.is_empty())
+                {
+                    let width = ui.available_width();
+                    let amount_width = (width * 0.26).clamp(82.0, 150.0);
+                    let ratio_width = 64.0;
+                    let name_width = (width - amount_width - ratio_width - 24.0).max(70.0);
+                    egui::Grid::new(("research_holders", width.round() as u32))
+                        .num_columns(3)
+                        .striped(true)
+                        .spacing([12.0, 2.0])
+                        .show(ui, |ui| {
+                            for (w, label, numeric) in [
+                                (name_width, "股东名称", false),
+                                (amount_width, "持有股数", true),
+                                (ratio_width, "占比 %", true),
+                            ] {
+                                detail_design::cell(ui, w, label, numeric, muted());
+                            }
                             ui.end_row();
-                        }
-                    });
-            } else {
-                ui.label("暂无股东数据");
-            }
-            self.dataset_note(ui, "holders");
-        });
+                            for r in rows {
+                                detail_design::cell(
+                                    ui,
+                                    name_width,
+                                    value_text(&r["holder_name"]),
+                                    false,
+                                    text_color(),
+                                );
+                                detail_design::cell(
+                                    ui,
+                                    amount_width,
+                                    money(number(r, "hold_amount")),
+                                    true,
+                                    text_color(),
+                                );
+                                detail_design::cell(
+                                    ui,
+                                    ratio_width,
+                                    num(r, "hold_ratio"),
+                                    true,
+                                    text_color(),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                } else {
+                    detail_design::caption(ui, "暂无股东数据");
+                }
+                self.dataset_note(ui, "holders");
+            },
+        );
     }
     fn funds_panel(&self, ui: &mut egui::Ui) {
         let rows = self.stock.data["datasets"]["funds"]["rows"]
             .as_array()
             .cloned()
             .unwrap_or_default();
-        card(ui, 0.0, |ui| {
-            card_title(ui, "个股资金流向", "按主动买卖成交分类；金额统一为元。");
-            if let Some(last) = rows.first() {
-                metrics(
-                    ui,
-                    &[
-                        ("净流入（供应商口径）", money(number(last, "net_mf_amount"))),
-                        ("大单净额", money(number(last, "large_net"))),
-                        ("超大单净额", money(number(last, "extra_large_net"))),
-                        ("近 5 日净流入", sum_money(&rows, 5)),
-                        ("近 20 日净流入", sum_money(&rows, 20)),
-                    ],
-                );
-            } else {
-                ui.label("暂无资金数据；刷新后显示最近 60 个交易日。");
-            }
-            ui.small("净流入使用数据源原字段，可能与各成交分类差额之和不同。大单 20–100 万，超大单 ≥100 万。");
-            self.dataset_note(ui, "funds");
-            ui.add_space(12.0);
-            egui::ScrollArea::horizontal().show(ui, |ui| {
-                egui::Grid::new("funds_rows")
-                    .striped(true)
-                    .spacing([20.0, 8.0])
-                    .show(ui, |ui| {
-                        for label in [
-                            "交易日期",
-                            "净流入",
-                            "大单净额",
-                            "超大单净额",
-                            "大单买入",
-                            "大单卖出",
-                        ] {
-                            ui.strong(label);
-                        }
-                        ui.end_row();
-                        for r in &rows {
-                            ui.label(value_text(&r["trade_date"]));
-                            for field in [
-                                "net_mf_amount",
-                                "large_net",
-                                "extra_large_net",
-                                "buy_lg_amount",
-                                "sell_lg_amount",
-                            ] {
-                                let n = number(r, field);
-                                ui.colored_label(
-                                    if n.unwrap_or(0.0) >= 0.0 {
-                                        up_color()
-                                    } else {
-                                        down_color()
-                                    },
-                                    money(n),
+        detail_design::section(
+            ui,
+            "资金流向",
+            "金额 / 元 · 主动买卖成交分类",
+            |ui| {
+                if let Some(last) = rows.first() {
+                    metrics(
+                        ui,
+                        &[
+                            ("净流入（供应商口径）", money(number(last, "net_mf_amount"))),
+                            ("大单净额", money(number(last, "large_net"))),
+                            ("超大单净额", money(number(last, "extra_large_net"))),
+                            ("近5日净流入", sum_money(&rows, 5)),
+                            ("近20日净流入", sum_money(&rows, 20)),
+                        ],
+                    );
+                } else {
+                    detail_design::caption(ui, "暂无资金数据，刷新后显示最近60个交易日。");
+                }
+                self.dataset_note(ui, "funds");
+                ui.collapsing("资金统计口径",|ui|{detail_design::caption(ui,"净流入采用供应商原字段，可能与分类差额之和不同。大单20–100万元，超大单≥100万元。");});
+                if rows.is_empty() {
+                    return;
+                }
+                ui.add_space(6.0);
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    let width = ui.available_width().max(660.0);
+                    let value_width = ((width - 100.0 - 60.0) / 5.0).max(100.0);
+                    egui::Grid::new(("funds_rows", width.round() as u32))
+                        .num_columns(6)
+                        .striped(true)
+                        .spacing([12.0, 2.0])
+                        .show(ui, |ui| {
+                            for (i, label) in [
+                                "交易日期",
+                                "净流入",
+                                "大单净额",
+                                "超大单净额",
+                                "大单买入",
+                                "大单卖出",
+                            ]
+                            .iter()
+                            .enumerate()
+                            {
+                                detail_design::cell(
+                                    ui,
+                                    if i == 0 { 100.0 } else { value_width },
+                                    *label,
+                                    i > 0,
+                                    muted(),
                                 );
                             }
                             ui.end_row();
-                        }
-                    });
-            });
-        });
+                            for r in &rows {
+                                detail_design::cell(
+                                    ui,
+                                    100.0,
+                                    detail_design::date(&value_text(&r["trade_date"])),
+                                    false,
+                                    muted(),
+                                );
+                                for (i, field) in [
+                                    "net_mf_amount",
+                                    "large_net",
+                                    "extra_large_net",
+                                    "buy_lg_amount",
+                                    "sell_lg_amount",
+                                ]
+                                .iter()
+                                .enumerate()
+                                {
+                                    let n = number(r, field);
+                                    let color = if i >= 3 || n.is_none_or(|v| v == 0.0) {
+                                        text_color()
+                                    } else if n.unwrap() > 0.0 {
+                                        up_color()
+                                    } else {
+                                        down_color()
+                                    };
+                                    detail_design::cell(ui, value_width, money(n), true, color);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+            },
+        );
     }
     fn announcements_panel(&self, ui: &mut egui::Ui) {
-        card(ui, 0.0, |ui| {
-            card_title(ui, "公司公告", "近一年披露记录 · 点击标题打开公告原文");
-            ui.hyperlink_to(
-                "巨潮资讯 · 官方公告查询 ↗",
-                "https://www.cninfo.com.cn/new/index",
-            );
-            self.dataset_note(ui, "announcements");
-            ui.add_space(12.0);
-            if let Some(rows) = self.stock.data["datasets"]["announcements"]["rows"]
-                .as_array()
-                .filter(|r| !r.is_empty())
-            {
-                for r in rows {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(muted(), value_text(&r["ann_date"]));
-                        let title = value_text(&r["title"]);
-                        if let Some(url) = r["url"]
-                            .as_str()
-                            .filter(|u| getrich_core::research::safe_url(u))
-                        {
-                            ui.hyperlink_to(title, url);
-                        } else {
-                            ui.label(title);
-                        }
-                    });
-                    ui.separator();
-                }
-            } else {
-                ui.label(
-                    if self.stock.data["datasets"]["announcements"]["error"].is_null() {
-                        "近一年未返回公告记录。"
-                    } else {
-                        "未能获取公告，请核对权限后重试。"
-                    },
+        detail_design::section(
+            ui,
+            "公司公告",
+            "近一年披露记录 · 点击标题查看原文",
+            |ui| {
+                self.dataset_note(ui, "announcements");
+                ui.hyperlink_to(
+                    "巨潮资讯 · 官方公告查询 ↗",
+                    "https://www.cninfo.com.cn/new/index",
                 );
-            }
-        });
+                ui.add_space(6.0);
+                if let Some(rows) = self.stock.data["datasets"]["announcements"]["rows"]
+                    .as_array()
+                    .filter(|r| !r.is_empty())
+                {
+                    for r in rows {
+                        ui.horizontal_top(|ui| {
+                            ui.add_sized(
+                                [96.0, 24.0],
+                                egui::Label::new(
+                                    egui::RichText::new(detail_design::date(&value_text(
+                                        &r["ann_date"],
+                                    )))
+                                    .size(12.0)
+                                    .color(muted()),
+                                ),
+                            );
+                            let width = ui.available_width();
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(width, 0.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.set_width(width);
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                                    let title = value_text(&r["title"]);
+                                    if let Some(url) = r["url"]
+                                        .as_str()
+                                        .filter(|u| getrich_core::research::safe_url(u))
+                                    {
+                                        ui.hyperlink_to(title, url);
+                                    } else {
+                                        ui.add(egui::Label::new(title).wrap());
+                                    }
+                                },
+                            );
+                        });
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                    }
+                } else {
+                    detail_design::caption(
+                        ui,
+                        if self.stock.data["datasets"]["announcements"]["error"].is_null() {
+                            "近一年未返回公告记录。"
+                        } else {
+                            "公告获取未成功，请核对权限后重试。"
+                        },
+                    );
+                }
+            },
+        );
     }
     pub(super) fn intraday_chart(&mut self, ui: &mut egui::Ui) {
         self.research_status(ui, "intraday");
@@ -576,7 +649,7 @@ impl GetRichApp {
                 Pos2::new(plot.left() - 8.0, y),
                 egui::Align2::RIGHT_CENTER,
                 format!("{value:.2}"),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(12.0),
                 muted(),
             );
             if let Some(prev) = prev {
@@ -584,7 +657,7 @@ impl GetRichApp {
                     Pos2::new(plot.right() + 8.0, y),
                     egui::Align2::LEFT_CENTER,
                     format!("{:+.2}%", (value / prev - 1.0) * 100.0),
-                    egui::FontId::proportional(11.0),
+                    egui::FontId::proportional(12.0),
                     if value >= prev {
                         up_color()
                     } else {
@@ -605,7 +678,7 @@ impl GetRichApp {
                 Pos2::new(pos.x, rect.bottom() - 8.0),
                 egui::Align2::CENTER_BOTTOM,
                 label,
-                egui::FontId::proportional(10.0),
+                egui::FontId::proportional(12.0),
                 muted(),
             );
         }
@@ -712,19 +785,5 @@ fn sum_money(rows: &[Value], count: usize) -> String {
     money(values.map(|v| v.iter().sum()))
 }
 pub(super) fn metrics(ui: &mut egui::Ui, fields: &[(&str, String)]) {
-    let columns = if ui.available_width() > 700.0 { 4 } else { 2 };
-    for row in fields.chunks(columns) {
-        ui.columns(columns, |cols| {
-            for ((label, value), col) in row.iter().zip(cols) {
-                col.add(
-                    egui::Label::new(egui::RichText::new(*label).color(muted()).size(12.0))
-                        .truncate(),
-                );
-                col.add(
-                    egui::Label::new(egui::RichText::new(value).size(19.0).strong()).truncate(),
-                );
-            }
-        });
-        ui.add_space(10.0);
-    }
+    detail_design::metrics(ui, fields);
 }

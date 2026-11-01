@@ -1,0 +1,94 @@
+/* Stock detail has one typography scale, independent of dashboard cards. */
+.pane-detail {
+  --detail-label: 12px;
+  --detail-body: 14px;
+  --detail-value: 16px;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-size: var(--detail-body);
+  line-height: 1.55;
+  padding: 16px 20px;
+}
+.pane-detail button, .pane-detail input, .pane-detail select, .pane-detail textarea {font: inherit;}
+.pane-detail button, .pane-detail select {min-height:32px;font-size:13px;}
+.pane-detail .detail-hero {gap:8px 14px;min-height:34px;}
+.pane-detail .detail-hero h1 {font-size:22px;font-weight:600;line-height:1.4;}
+.pane-detail #detail-code, .pane-detail #detail-time {font-size:12px;}
+.pane-detail #detail-last {font-size:26px;font-weight:600;letter-spacing:0;}
+.pane-detail #detail-chg {font-size:13px;}
+.pane-detail .quote-strip {margin:4px 0 8px;gap:4px 16px;}
+.pane-detail .quote-strip dt {font-size:12px;}
+.pane-detail .quote-strip dd {font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pane-detail .stock-subnav {display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line);}
+.pane-detail .stock-subnav #research-refresh {flex:none;margin-left:auto;}
+.pane-detail #research-tabs {display:flex;flex-wrap:wrap;gap:4px;flex:1 1 480px;margin:0;padding:0;border:0;background:transparent;}
+.pane-detail #research-tabs button {flex:none;max-width:none;width:auto;min-height:32px;padding:5px 14px;font-size:13px;}
+.pane-detail .detail-toolbar {display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px;padding:8px 10px;align-items:center;background:var(--surface);}
+.pane-detail .detail-toolbar #tf-tabs {grid-column:1;grid-row:1;margin:0;}
+.pane-detail .detail-toolbar #chart-actions {grid-column:2;grid-row:1;justify-self:end;}
+.pane-detail .detail-toolbar:has(#tf-tabs[hidden]) {display:none;}
+.pane-detail #chart-readout {grid-column:1/-1;grid-row:2;gap:3px 16px;}
+.pane-detail #chart-readout p {font:12px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;height:auto;}
+.pane-detail #chart-readout #kline-meta {font-size:13px;font-variant-numeric:tabular-nums;}
+.pane-detail #ma-controls {grid-row:3;}
+.pane-detail #ma-controls label {font-size:12px;}
+.pane-detail #ma-controls output {font-family:inherit;font-variant-numeric:tabular-nums;}
+.pane-detail #kline {height:clamp(300px,calc(100dvh - 365px),800px);}
+.pane-detail #research-status {font-size:12px;line-height:1.6;margin:8px 0;}
+.pane-detail #research-panel {gap:12px;margin-top:10px;}
+.pane-detail #research-panel .card {padding:16px;margin:0;border-radius:8px;min-width:0;}
+.pane-detail #research-panel h2 {font-size:16px;font-weight:600;line-height:1.5;margin:0 0 8px;}
+.pane-detail #research-panel h3 {font-size:14px;line-height:1.5;}
+.pane-detail #research-panel p {font-size:14px;line-height:1.65;margin:6px 0;}
+.pane-detail #research-panel .microcopy, .pane-detail #research-panel .source-note {font-size:12px;line-height:1.6;color:var(--muted);overflow-wrap:anywhere;}
+.pane-detail #research-panel .error {font-size:13px;overflow-wrap:anywhere;}
+.pane-detail #research-panel .research-metrics {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 16px;margin:12px 0;}
+.pane-detail #research-panel .research-metrics dt {font-size:12px;line-height:1.5;color:var(--muted);margin:0;}
+.pane-detail #research-panel .research-metrics dd {font-size:16px;font-weight:500;line-height:1.5;margin:4px 0 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+.pane-detail #research-panel .f10-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start;}
+.pane-detail #research-panel .f10-column {display:grid;gap:12px;min-width:0;}
+.pane-detail #research-panel .f10-grid .research-metrics {grid-template-columns:repeat(2,minmax(0,1fr));}
+.pane-detail .company-fields {display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px 12px;margin:12px 0;font-size:14px;}
+.pane-detail .company-fields dt {color:var(--muted);font-size:12px;padding-top:2px;}
+.pane-detail .company-fields dd {margin:0;overflow-wrap:anywhere;}
+.pane-detail #research-panel details {margin:10px 0 0;font-size:13px;}
+.pane-detail #research-panel summary {font-size:13px;line-height:1.6;padding:4px 0;}
+.pane-detail #research-panel table {font-size:13px;table-layout:fixed;}
+.pane-detail #research-panel td,.pane-detail #research-panel th {padding:9px 10px;line-height:1.6;}
+.pane-detail #research-panel th {font-size:12px;font-weight:500;}
+.pane-detail #research-panel td.num {font-variant-numeric:tabular-nums;}
+.pane-detail .holders-table td:first-child {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.pane-detail .funds-table {min-width:650px;}
+.pane-detail #research-panel .announcement-list {margin-top:12px;}
+.pane-detail #research-panel .announcement-list article {display:grid;grid-template-columns:100px minmax(0,1fr);gap:12px;padding:12px 0;border-bottom:1px solid var(--line);align-items:start;}
+.pane-detail .announcement-list time {font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;line-height:1.85;white-space:nowrap;}
+.pane-detail .announcement-list a,.pane-detail .announcement-list span {font-size:14px;line-height:1.65;overflow-wrap:anywhere;}
+.pane-detail .research-modes {background:var(--bg);width:fit-content;max-width:100%;gap:3px;}
+.pane-detail .research-modes button {font-size:13px;min-height:32px;padding:5px 10px;}
+.pane-detail #research-panel .journal-fields {gap:14px 16px;}
+.pane-detail .journal-fields .field {font-size:13px;color:var(--text);gap:6px;}
+.pane-detail .journal-fields textarea {font-size:14px;line-height:1.65;padding:10px 12px;min-height:92px;resize:vertical;}
+.pane-detail #research-panel .actions {gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;}
+.pane-detail #research-panel .actions span {font-size:12px;color:var(--muted);}
+.pane-detail #research-panel .inline-form {align-items:end;gap:10px;}
+.pane-detail #research-panel .inline-form .field {min-width:110px;flex:1;}
+.pane-detail .chart-caption {font-size:12px;}
+@container(max-width:1000px) {
+  .pane-detail #research-panel .f10-grid {grid-template-columns:1fr;}
+  .pane-detail #research-panel .f10-grid .research-metrics {grid-template-columns:repeat(4,minmax(0,1fr));}
+}
+@container(max-width:700px) {
+  .pane-detail .detail-toolbar {grid-template-columns:minmax(0,1fr) auto;}
+  .pane-detail .detail-toolbar #tf-tabs {grid-column:1/-1;grid-row:1;justify-self:start;}
+  .pane-detail .detail-toolbar #chart-actions {grid-column:1;grid-row:2;justify-self:start;}
+  .pane-detail #chart-readout {grid-row:3;}
+  .pane-detail #ma-controls {grid-row:4;}
+  .pane-detail #research-panel .research-metrics,.pane-detail #research-panel .f10-grid .research-metrics {grid-template-columns:repeat(2,minmax(0,1fr));}
+  .pane-detail #research-panel .journal-fields {grid-template-columns:1fr;}
+  .pane-detail #research-tabs button {flex:1;min-width:0;padding:5px 7px;}
+}
+@container(max-width:430px) {
+  .pane-detail #research-tabs {gap:2px;}
+  .pane-detail #research-tabs button {font-size:12px;}
+  .pane-detail #research-panel .announcement-list article {grid-template-columns:1fr;gap:3px;}
+  .pane-detail .company-fields {grid-template-columns:72px minmax(0,1fr);}
+}
